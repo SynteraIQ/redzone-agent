@@ -12,6 +12,7 @@ export type RepositorySnapshot = {
   headRef: string;
   headSha: string;
   changedFiles: string[];
+  workingTreeFiles: string[];
   diff: string;
   history: CommitEvidence[];
 };
@@ -42,16 +43,23 @@ export function collectRepositorySnapshot(
     "--end-of-options",
     `${headRef}^{commit}`,
   ]).trim();
-  const changedFiles = git(repositoryPath, [
+  const mergeBase = git(repositoryPath, ["merge-base", baseSha, headSha]).trim();
+  const committedFiles = git(repositoryPath, [
     "diff",
     "--name-only",
     "-z",
-    `${baseSha}...${headSha}`,
+    mergeBase,
+    headSha,
   ])
     .split("\0")
     .filter(Boolean);
-
-  const diff = git(repositoryPath, ["diff", "--no-ext-diff", `${baseSha}...${headSha}`, "--", ...changedFiles]);
+  const workingTreeFiles = git(repositoryPath, ["diff", "--name-only", "-z", headSha])
+    .split("\0")
+    .filter(Boolean);
+  const changedFiles = [...new Set([...committedFiles, ...workingTreeFiles])];
+  const diff = changedFiles.length
+    ? git(repositoryPath, ["diff", "--no-ext-diff", mergeBase, "--", ...changedFiles])
+    : "";
   const rawHistory = changedFiles.length
     ? git(repositoryPath, [
         "log",
@@ -94,6 +102,7 @@ export function collectRepositorySnapshot(
     headRef,
     headSha,
     changedFiles,
+    workingTreeFiles,
     diff,
     history,
   };

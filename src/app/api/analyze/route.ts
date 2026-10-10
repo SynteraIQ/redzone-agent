@@ -47,7 +47,11 @@ export async function POST(request: Request): Promise<Response> {
       const snapshot = collectRepositorySnapshot(process.cwd(), baseRef);
       if (snapshot.changedFiles.length === 0) {
         writer.write({ type: "text-start", id: "red-zone-report" });
-        writer.write({ type: "text-delta", id: "red-zone-report", delta: `No changed files found between ${baseRef} and HEAD.` });
+        writer.write({
+          type: "text-delta",
+          id: "red-zone-report",
+          delta: `No committed or tracked working-tree changes found between ${baseRef} and HEAD. Untracked files are not included.`,
+        });
         writer.write({ type: "text-end", id: "red-zone-report" });
         return;
       }
