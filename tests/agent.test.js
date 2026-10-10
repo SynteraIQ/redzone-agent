@@ -30,7 +30,15 @@ test("accepts the byte limit and preserves structured output and evidence filter
   input.diff = "x".repeat(65536 - initialBytes);
   const generate = t.mock.method(redZoneAgent, "generate", async (prompt, options) => {
     assert.equal(Buffer.byteLength(prompt), 65536);
-    assert.deepEqual(JSON.parse(prompt), { ...input, reviewEvidence: reviews });
+    assert.deepEqual(JSON.parse(prompt), {
+      candidateChange: {
+        baseRef: input.baseRef,
+        headRef: input.headRef,
+        changedFiles: input.changedFiles,
+        diff: input.diff,
+      },
+      historicalEvidence: { commits: input.history, reviewEvidence: reviews },
+    });
     assert.deepEqual(options.structuredOutput.schema.parse(object), object);
     return { object };
   });
