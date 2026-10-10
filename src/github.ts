@@ -33,13 +33,17 @@ type GitHubComment = {
   created_at: string;
 };
 
-function ghJson<T>(endpoint: string): T {
-  const output = execFileSync("gh", ["api", endpoint], {
+function ghJson<T>(endpoint: string, options: string[] = []): T {
+  const output = execFileSync("gh", ["api", endpoint, ...options], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 8 * 1024 * 1024,
   });
   return JSON.parse(output) as T;
+}
+
+function ghPages<T>(endpoint: string): T[] {
+  return ghJson<T[][]>(endpoint, ["--paginate", "--slurp"]).flat();
 }
 
 function configuredRepository(): string | undefined {
@@ -73,7 +77,7 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewEvide
   for (const pullRequest of pullRequests) {
     if (pullRequest.head.sha === snapshot.headSha) continue;
 
-    const files = ghJson<PullRequestFile[]>(
+    const files = ghPages<PullRequestFile>(
       `repos/${repository}/pulls/${pullRequest.number}/files?per_page=100`,
     );
     const overlappingFiles = files
@@ -81,7 +85,7 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewEvide
       .filter((file) => changedPathSet.has(file));
     if (overlappingFiles.length === 0) continue;
 
-    const inlineComments = ghJson<GitHubComment[]>(
+    const inlineComments = ghPages<GitHubComment>(
       `repos/${repository}/pulls/${pullRequest.number}/comments?per_page=100`,
     );
     for (const comment of inlineComments) {
@@ -101,7 +105,7 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewEvide
       });
     }
 
-    const conversationComments = ghJson<GitHubComment[]>(
+    const conversationComments = ghPages<GitHubComment>(
       `repos/${repository}/issues/${pullRequest.number}/comments?per_page=100`,
     );
     for (const comment of conversationComments) {

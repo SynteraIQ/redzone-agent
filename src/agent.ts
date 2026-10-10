@@ -14,6 +14,9 @@ const AnalysisSchema = z.object({
 
 export type RedZoneAnalysis = z.infer<typeof AnalysisSchema>;
 
+// Bound the complete serialized evidence, including JSON escaping and metadata.
+const MAX_PROMPT_BYTES = 64 * 1024;
+
 export const redZoneAgent = new Agent({
   id: "red-zone-agent",
   name: "Red Zone Agent",
@@ -31,15 +34,24 @@ export async function analyzeSnapshot(
   snapshot: RepositorySnapshot,
   reviewEvidence: ReviewEvidence[],
 ): Promise<RedZoneAnalysis> {
+  const prompt = JSON.stringify({
+    baseRef: snapshot.baseRef,
+    headRef: snapshot.headRef,
+    changedFiles: snapshot.changedFiles,
+    diff: snapshot.diff,
+    history: snapshot.history,
+    reviewEvidence,
+  });
+  const promptBytes = Buffer.byteLength(prompt, "utf8");
+  if (promptBytes > MAX_PROMPT_BYTES) {
+    throw new Error(
+      `Red Zone Agent input is ${promptBytes} bytes, exceeding the ${MAX_PROMPT_BYTES}-byte limit. ` +
+      "Use a smaller diff or reduce the supplied history or review evidence.",
+    );
+  }
+
   const result = await redZoneAgent.generate(
-    JSON.stringify({
-      baseRef: snapshot.baseRef,
-      headRef: snapshot.headRef,
-      changedFiles: snapshot.changedFiles,
-      diff: snapshot.diff,
-      history: snapshot.history,
-      reviewEvidence,
-    }),
+    prompt,
     {
       structuredOutput: {
         schema: AnalysisSchema,
