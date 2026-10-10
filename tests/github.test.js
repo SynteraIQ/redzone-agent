@@ -43,6 +43,14 @@ test("retrieves formal decisions and later comment pages for overlapping PRs", (
         id: 5, state: "CHANGES_REQUESTED", body: "Please handle the race.",
         html_url: "https://example.invalid/review/5", submitted_at: "2026-10-10",
         user: { login: "reviewer" },
+      }, {
+        id: 6, state: "APPROVED", body: "",
+        html_url: "https://example.invalid/review/6", submitted_at: "2026-10-10",
+      }, {
+        id: 7, state: "COMMENTED",
+        html_url: "https://example.invalid/review/7", submitted_at: "2026-10-10",
+      }, {
+        id: 8, state: "PENDING", body: "Unsubmitted draft",
       }]]);
     }
     if (endpoint.includes("/pulls/1/comments?")) {
@@ -60,9 +68,13 @@ test("retrieves formal decisions and later comment pages for overlapping PRs", (
   syncBuiltinESMExports();
   const collection = collectReviewEvidence({ changedFiles: ["target"], headSha: "current" });
   assert.deepEqual(collection.evidence.map(({ id }) => id), [
-    "formal-5", "review-101", "conversation-102", "conversation-103",
+    "formal-5", "formal-6", "formal-7", "review-101", "conversation-102", "conversation-103",
   ]);
   assert.equal(collection.evidence[0].decision, "CHANGES_REQUESTED");
+  assert.deepEqual(collection.evidence.slice(1, 3).map(({ decision, body }) => ({ decision, body })), [
+    { decision: "APPROVED", body: "" },
+    { decision: "COMMENTED", body: "" },
+  ]);
   assert.deepEqual(collection.coverage, {
     githubConfigured: true,
     repository: "test/repository",
@@ -71,7 +83,7 @@ test("retrieves formal decisions and later comment pages for overlapping PRs", (
     overlappingPullRequests: 1,
     mayHaveMorePullRequests: false,
     evidenceCounts: {
-      formalReviews: 1,
+      formalReviews: 3,
       inlineComments: 1,
       conversationComments: 2,
       automatedConversationCommentsSkipped: 1,

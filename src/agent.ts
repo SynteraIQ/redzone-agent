@@ -28,6 +28,7 @@ export const redZoneAgent = new Agent({
     "Describe historical review feedback as a reviewer concern; do not present it as a confirmed production incident.",
     "A shared filename alone does not establish relevance; cited evidence must concern behavior changed in candidateChange.diff.",
     "Report a formal review state exactly; COMMENTED is not an approval or a request for changes.",
+    "When reviewBodiesCompacted is true, review bodies are incomplete; do not infer an absence of concerns from empty or shortened bodies.",
     "When source coverage is limited or GitHub history is unavailable, state that limitation and avoid claiming no prior precedent exists.",
     "Return only commit hashes and review evidence IDs present in the supplied evidence.",
     "If the supplied history does not support a risk claim, use insufficient-evidence and say what is missing.",
@@ -40,7 +41,7 @@ export async function analyzeSnapshot(
   reviewEvidence: ReviewEvidence[],
   sourceCoverage?: ReviewCoverage,
 ): Promise<RedZoneAnalysis> {
-  const prompt = JSON.stringify({
+  const serializePrompt = (evidence: ReviewEvidence[], compacted = false) => JSON.stringify({
     candidateChange: {
       baseRef: snapshot.baseRef,
       headRef: snapshot.headRef,
@@ -49,12 +50,41 @@ export async function analyzeSnapshot(
     },
     historicalEvidence: {
       commits: snapshot.history,
-      reviewEvidence,
+      reviewEvidence: evidence,
+      ...(compacted ? { reviewBodiesCompacted: true } : {}),
       ...(sourceCoverage ? { sourceCoverage } : {}),
     },
   });
   // Bound the entire serialized input, including JSON escaping and metadata.
   const maxPromptBytes = 64 * 1024;
+  let prompt = serializePrompt(reviewEvidence);
+  if (Buffer.byteLength(prompt, "utf8") > maxPromptBytes) {
+    // Shorten only bodies so every review's decision and provenance remain available.
+    const compactPrompt = (bodyLength: number) => serializePrompt(
+      reviewEvidence.map((review) => ({
+        ...review,
+        // Avoid cutting a UTF-16 surrogate pair in half.
+        body: review.body.slice(0, bodyLength).replace(/[\uD800-\uDBFF]$/, ""),
+      })),
+      true,
+    );
+    prompt = compactPrompt(0);
+    if (Buffer.byteLength(prompt, "utf8") <= maxPromptBytes) {
+      let lower = 1;
+      let upper = reviewEvidence.reduce((longest, review) => Math.max(longest, review.body.length), 0);
+      // Find the largest common body prefix that fits the serialized byte budget.
+      while (lower <= upper) {
+        const length = Math.floor((lower + upper) / 2);
+        const candidate = compactPrompt(length);
+        if (Buffer.byteLength(candidate, "utf8") <= maxPromptBytes) {
+          prompt = candidate;
+          lower = length + 1;
+        } else {
+          upper = length - 1;
+        }
+      }
+    }
+  }
   const promptBytes = Buffer.byteLength(prompt, "utf8");
   if (promptBytes > maxPromptBytes) {
     throw new Error(
