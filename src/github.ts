@@ -6,13 +6,34 @@ export type ReviewEvidence = {
   pullRequestNumber: number;
   pullRequestTitle: string;
   pullRequestUrl: string;
-  source: "inline-review" | "pr-conversation";
+  source: "formal-review" | "inline-review" | "pr-conversation";
   author: string;
   body: string;
+  decision?: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
   path?: string;
   commitId?: string;
   commentUrl: string;
   createdAt: string;
+};
+
+export type ReviewCoverage = {
+  githubConfigured: boolean;
+  repository: string | null;
+  pullRequestLimit: number | null;
+  pullRequestsFetched: number;
+  overlappingPullRequests: number;
+  mayHaveMorePullRequests: boolean;
+  evidenceCounts: {
+    formalReviews: number;
+    inlineComments: number;
+    conversationComments: number;
+    automatedConversationCommentsSkipped: number;
+  };
+};
+
+export type ReviewCollection = {
+  evidence: ReviewEvidence[];
+  coverage: ReviewCoverage;
 };
 
 type PullRequestRecord = {
@@ -31,6 +52,16 @@ type GitHubComment = {
   commit_id?: string;
   html_url: string;
   created_at: string;
+};
+
+type GitHubReview = {
+  id: number;
+  user?: { login?: string };
+  body?: string;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
+  commit_id?: string;
+  html_url: string;
+  submitted_at?: string;
 };
 
 function ghJson<T>(endpoint: string, args: string[] = []): T {
@@ -63,9 +94,27 @@ function pullRequestLimit(): number {
   return configuredLimit;
 }
 
-export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewEvidence[] {
+export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewCollection {
   const repository = configuredRepository();
-  if (!repository || snapshot.changedFiles.length === 0) return [];
+  if (!repository || snapshot.changedFiles.length === 0) {
+    return {
+      evidence: [],
+      coverage: {
+        githubConfigured: Boolean(repository),
+        repository: repository ?? null,
+        pullRequestLimit: null,
+        pullRequestsFetched: 0,
+        overlappingPullRequests: 0,
+        mayHaveMorePullRequests: false,
+        evidenceCounts: {
+          formalReviews: 0,
+          inlineComments: 0,
+          conversationComments: 0,
+          automatedConversationCommentsSkipped: 0,
+        },
+      },
+    };
+  }
 
   const limit = pullRequestLimit();
   const pullRequests = ghJson<PullRequestRecord[]>(
@@ -73,6 +122,8 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewEvide
   );
   const changedPathSet = new Set(snapshot.changedFiles);
   const evidence: ReviewEvidence[] = [];
+  let overlappingPullRequests = 0;
+  let automatedConversationCommentsSkipped = 0;
 
   for (const pullRequest of pullRequests) {
     if (pullRequest.head.sha === snapshot.headSha) continue;
@@ -84,6 +135,27 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewEvide
       .map((file) => file.filename)
       .filter((file) => changedPathSet.has(file));
     if (overlappingFiles.length === 0) continue;
+    overlappingPullRequests++;
+
+    const formalReviews = ghPaginated<GitHubReview>(
+      `repos/${repository}/pulls/${pullRequest.number}/reviews?per_page=100`,
+    );
+    for (const review of formalReviews) {
+      if (!review.state || !review.submitted_at) continue;
+      evidence.push({
+        id: `formal-${review.id}`,
+        pullRequestNumber: pullRequest.number,
+        pullRequestTitle: pullRequest.title,
+        pullRequestUrl: pullRequest.html_url,
+        source: "formal-review",
+        author: review.user?.login ?? "unknown",
+        body: review.body ?? "",
+        decision: review.state,
+        commitId: review.commit_id,
+        commentUrl: review.html_url,
+        createdAt: review.submitted_at,
+      });
+    }
 
     const inlineComments = ghPaginated<GitHubComment>(
       `repos/${repository}/pulls/${pullRequest.number}/comments?per_page=100`,
@@ -110,13 +182,18 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewEvide
     );
     for (const comment of conversationComments) {
       if (!comment.body) continue;
+      const author = comment.user?.login ?? "unknown";
+      if (author.endsWith("[bot]")) {
+        automatedConversationCommentsSkipped++;
+        continue;
+      }
       evidence.push({
         id: `conversation-${comment.id}`,
         pullRequestNumber: pullRequest.number,
         pullRequestTitle: pullRequest.title,
         pullRequestUrl: pullRequest.html_url,
         source: "pr-conversation",
-        author: comment.user?.login ?? "unknown",
+        author,
         body: comment.body,
         commentUrl: comment.html_url,
         createdAt: comment.created_at,
@@ -124,5 +201,21 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewEvide
     }
   }
 
-  return evidence;
+  return {
+    evidence,
+    coverage: {
+      githubConfigured: true,
+      repository,
+      pullRequestLimit: limit,
+      pullRequestsFetched: pullRequests.length,
+      overlappingPullRequests,
+      mayHaveMorePullRequests: pullRequests.length >= limit,
+      evidenceCounts: {
+        formalReviews: evidence.filter((item) => item.source === "formal-review").length,
+        inlineComments: evidence.filter((item) => item.source === "inline-review").length,
+        conversationComments: evidence.filter((item) => item.source === "pr-conversation").length,
+        automatedConversationCommentsSkipped,
+      },
+    },
+  };
 }
