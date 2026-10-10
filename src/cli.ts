@@ -15,19 +15,24 @@ if (!process.env.OPENAI_API_KEY) {
     if (snapshot.changedFiles.length === 0) {
       console.log(`No changed files found between ${baseRef} and HEAD.`);
     } else {
-      const reviewEvidence = collectReviewEvidence(snapshot);
-      const analysis = await analyzeSnapshot(snapshot, reviewEvidence);
+      const reviewCollection = collectReviewEvidence(snapshot);
+      const analysis = await analyzeSnapshot(
+        snapshot,
+        reviewCollection.evidence,
+        reviewCollection.coverage,
+      );
       console.log(JSON.stringify({
         repositoryPath,
         baseRef: snapshot.baseRef,
         headRef: snapshot.headRef,
         changedFiles: snapshot.changedFiles,
+        sourceCoverage: reviewCollection.coverage,
         analysis: {
           ...analysis,
           commitEvidence: analysis.commitEvidenceHashes.map((hash) =>
             snapshot.history.find((commit) => commit.hash === hash),
           ).filter(Boolean),
-          reviewEvidence: reviewEvidence.filter((comment) =>
+          reviewEvidence: reviewCollection.evidence.filter((comment) =>
             analysis.reviewEvidenceIds.includes(comment.id),
           ),
         },

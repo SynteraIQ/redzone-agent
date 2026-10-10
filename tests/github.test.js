@@ -4,7 +4,7 @@ import { syncBuiltinESMExports } from "node:module";
 import test from "node:test";
 import { collectReviewEvidence } from "../src/github.ts";
 
-test("retrieves later pages and keeps conversations for overlapping PRs", (t) => {
+test("retrieves formal decisions and later comment pages for overlapping PRs", (t) => {
   const originalRepo = process.env.GH_REPO;
   const originalLimit = process.env.REDZONE_PR_LIMIT;
   process.env.GH_REPO = "test/repository";
@@ -38,6 +38,13 @@ test("retrieves later pages and keeps conversations for overlapping PRs", (t) =>
     if (endpoint.includes("/files?")) {
       return JSON.stringify([Array.from({ length: 100 }, (_, i) => ({ filename: `other-${i}` })), [{ filename: "target" }]]);
     }
+    if (endpoint.includes("/reviews?")) {
+      return JSON.stringify([[{
+        id: 5, state: "CHANGES_REQUESTED", body: "Please handle the race.",
+        html_url: "https://example.invalid/review/5", submitted_at: "2026-10-10",
+        user: { login: "reviewer" },
+      }]]);
+    }
     if (endpoint.includes("/pulls/1/comments?")) {
       return JSON.stringify([Array.from({ length: 100 }, (_, i) => comment(i, "unrelated")), [comment(101, "target")]]);
     }
@@ -45,7 +52,19 @@ test("retrieves later pages and keeps conversations for overlapping PRs", (t) =>
     return JSON.stringify([[comment(102)], [comment(103, "unrelated")]]);
   });
   syncBuiltinESMExports();
-  const evidence = collectReviewEvidence({ changedFiles: ["target"], headSha: "current" });
-  assert.deepEqual(evidence.map(({ id }) => id), ["review-101", "conversation-102", "conversation-103"]);
-  assert.equal(calls.length, 4);
+  const collection = collectReviewEvidence({ changedFiles: ["target"], headSha: "current" });
+  assert.deepEqual(collection.evidence.map(({ id }) => id), [
+    "formal-5", "review-101", "conversation-102", "conversation-103",
+  ]);
+  assert.equal(collection.evidence[0].decision, "CHANGES_REQUESTED");
+  assert.deepEqual(collection.coverage, {
+    githubConfigured: true,
+    repository: "test/repository",
+    pullRequestLimit: 30,
+    pullRequestsFetched: 2,
+    overlappingPullRequests: 1,
+    mayHaveMorePullRequests: false,
+    evidenceCounts: { formalReviews: 1, inlineComments: 1, conversationComments: 2 },
+  });
+  assert.equal(calls.length, 5);
 });
