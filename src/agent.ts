@@ -31,15 +31,26 @@ export async function analyzeSnapshot(
   snapshot: RepositorySnapshot,
   reviewEvidence: ReviewEvidence[],
 ): Promise<RedZoneAnalysis> {
+  const prompt = JSON.stringify({
+    baseRef: snapshot.baseRef,
+    headRef: snapshot.headRef,
+    changedFiles: snapshot.changedFiles,
+    diff: snapshot.diff,
+    history: snapshot.history,
+    reviewEvidence,
+  });
+  // Bound the entire serialized input, including JSON escaping and metadata.
+  const maxPromptBytes = 64 * 1024;
+  const promptBytes = Buffer.byteLength(prompt, "utf8");
+  if (promptBytes > maxPromptBytes) {
+    throw new Error(
+      `Analysis input is too large (${promptBytes} bytes; maximum ${maxPromptBytes}). ` +
+      "Reduce the diff, history, or review evidence before retrying.",
+    );
+  }
+
   const result = await redZoneAgent.generate(
-    JSON.stringify({
-      baseRef: snapshot.baseRef,
-      headRef: snapshot.headRef,
-      changedFiles: snapshot.changedFiles,
-      diff: snapshot.diff,
-      history: snapshot.history,
-      reviewEvidence,
-    }),
+    prompt,
     {
       structuredOutput: {
         schema: AnalysisSchema,

@@ -21,7 +21,7 @@ function git(repositoryPath: string, args: string[]): string {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 8 * 1024 * 1024,
-  }).trim();
+  });
 }
 
 export function collectRepositorySnapshot(
@@ -33,9 +33,10 @@ export function collectRepositorySnapshot(
   const changedFiles = git(repositoryPath, [
     "diff",
     "--name-only",
+    "-z",
     `${baseRef}...${headRef}`,
   ])
-    .split("\n")
+    .split("\0")
     .filter(Boolean);
 
   const diff = git(repositoryPath, ["diff", "--no-ext-diff", `${baseRef}...${headRef}`, "--", ...changedFiles]);
@@ -44,7 +45,8 @@ export function collectRepositorySnapshot(
         "log",
         `-${historyLimit}`,
         "--date=short",
-        "--format=__REDZONE_COMMIT__%H%x09%ad%x09%s",
+        "--format=%x00%H%x00%ad%x00%s",
+        "-z",
         "--name-only",
         "--",
         ...changedFiles,
@@ -52,30 +54,32 @@ export function collectRepositorySnapshot(
     : "";
 
   const history: CommitEvidence[] = [];
-  let current: CommitEvidence | undefined;
+  const fields = rawHistory.split("\0");
+  let cursor = 0;
 
-  for (const line of rawHistory.split("\n")) {
-    if (line.startsWith("__REDZONE_COMMIT__")) {
-      if (current) history.push(current);
-      const [hash, date, ...subjectParts] = line
-        .slice("__REDZONE_COMMIT__".length)
-        .split("\t");
-      current = {
-        hash,
-        date,
-        subject: subjectParts.join("\t"),
-        files: [],
-      };
-    } else if (current && line.trim()) {
-      current.files.push(line.trim());
+  while (cursor < fields.length - 1) {
+    // An empty field starts each commit; the next three fields are metadata.
+    cursor++;
+    const hash = fields[cursor++];
+    const date = fields[cursor++];
+    const subject = fields[cursor++];
+    const files: string[] = [];
+
+    // Git inserts one newline before the first path. All other bytes belong
+    // to the path, including any additional leading or trailing whitespace.
+    if (fields[cursor]?.startsWith("\n")) {
+      files.push(fields[cursor++].slice(1));
+      while (cursor < fields.length - 1 && fields[cursor] !== "") {
+        files.push(fields[cursor++]);
+      }
     }
+    history.push({ hash, date, subject, files });
   }
-  if (current) history.push(current);
 
   return {
     baseRef,
     headRef,
-    headSha: git(repositoryPath, ["rev-parse", headRef]),
+    headSha: git(repositoryPath, ["rev-parse", headRef]).trim(),
     changedFiles,
     diff,
     history,
