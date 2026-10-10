@@ -27,6 +27,7 @@ export type ReviewCoverage = {
     formalReviews: number;
     inlineComments: number;
     conversationComments: number;
+    automatedConversationCommentsSkipped: number;
   };
 };
 
@@ -105,7 +106,12 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewColle
         pullRequestsFetched: 0,
         overlappingPullRequests: 0,
         mayHaveMorePullRequests: false,
-        evidenceCounts: { formalReviews: 0, inlineComments: 0, conversationComments: 0 },
+        evidenceCounts: {
+          formalReviews: 0,
+          inlineComments: 0,
+          conversationComments: 0,
+          automatedConversationCommentsSkipped: 0,
+        },
       },
     };
   }
@@ -117,6 +123,7 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewColle
   const changedPathSet = new Set(snapshot.changedFiles);
   const evidence: ReviewEvidence[] = [];
   let overlappingPullRequests = 0;
+  let automatedConversationCommentsSkipped = 0;
 
   for (const pullRequest of pullRequests) {
     if (pullRequest.head.sha === snapshot.headSha) continue;
@@ -175,13 +182,18 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewColle
     );
     for (const comment of conversationComments) {
       if (!comment.body) continue;
+      const author = comment.user?.login ?? "unknown";
+      if (author.endsWith("[bot]")) {
+        automatedConversationCommentsSkipped++;
+        continue;
+      }
       evidence.push({
         id: `conversation-${comment.id}`,
         pullRequestNumber: pullRequest.number,
         pullRequestTitle: pullRequest.title,
         pullRequestUrl: pullRequest.html_url,
         source: "pr-conversation",
-        author: comment.user?.login ?? "unknown",
+        author,
         body: comment.body,
         commentUrl: comment.html_url,
         createdAt: comment.created_at,
@@ -202,6 +214,7 @@ export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewColle
         formalReviews: evidence.filter((item) => item.source === "formal-review").length,
         inlineComments: evidence.filter((item) => item.source === "inline-review").length,
         conversationComments: evidence.filter((item) => item.source === "pr-conversation").length,
+        automatedConversationCommentsSkipped,
       },
     },
   };

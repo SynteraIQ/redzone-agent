@@ -49,7 +49,13 @@ test("retrieves formal decisions and later comment pages for overlapping PRs", (
       return JSON.stringify([Array.from({ length: 100 }, (_, i) => comment(i, "unrelated")), [comment(101, "target")]]);
     }
     assert.match(endpoint, /\/issues\/1\/comments\?/);
-    return JSON.stringify([[comment(102)], [comment(103, "unrelated")]]);
+    return JSON.stringify([
+      [comment(102)],
+      [
+        comment(103, "unrelated"),
+        { ...comment(104), user: { login: "coderabbitai[bot]" } },
+      ],
+    ]);
   });
   syncBuiltinESMExports();
   const collection = collectReviewEvidence({ changedFiles: ["target"], headSha: "current" });
@@ -64,7 +70,12 @@ test("retrieves formal decisions and later comment pages for overlapping PRs", (
     pullRequestsFetched: 2,
     overlappingPullRequests: 1,
     mayHaveMorePullRequests: false,
-    evidenceCounts: { formalReviews: 1, inlineComments: 1, conversationComments: 2 },
+    evidenceCounts: {
+      formalReviews: 1,
+      inlineComments: 1,
+      conversationComments: 2,
+      automatedConversationCommentsSkipped: 1,
+    },
   });
   assert.equal(calls.length, 5);
 });

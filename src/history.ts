@@ -30,16 +30,28 @@ export function collectRepositorySnapshot(
   headRef = "HEAD",
   historyLimit = 40,
 ): RepositorySnapshot {
+  const baseSha = git(repositoryPath, [
+    "rev-parse",
+    "--verify",
+    "--end-of-options",
+    `${baseRef}^{commit}`,
+  ]).trim();
+  const headSha = git(repositoryPath, [
+    "rev-parse",
+    "--verify",
+    "--end-of-options",
+    `${headRef}^{commit}`,
+  ]).trim();
   const changedFiles = git(repositoryPath, [
     "diff",
     "--name-only",
     "-z",
-    `${baseRef}...${headRef}`,
+    `${baseSha}...${headSha}`,
   ])
     .split("\0")
     .filter(Boolean);
 
-  const diff = git(repositoryPath, ["diff", "--no-ext-diff", `${baseRef}...${headRef}`, "--", ...changedFiles]);
+  const diff = git(repositoryPath, ["diff", "--no-ext-diff", `${baseSha}...${headSha}`, "--", ...changedFiles]);
   const rawHistory = changedFiles.length
     ? git(repositoryPath, [
         "log",
@@ -48,6 +60,7 @@ export function collectRepositorySnapshot(
         "--format=%x00%H%x00%ad%x00%s",
         "-z",
         "--name-only",
+        baseSha,
         "--",
         ...changedFiles,
       ])
@@ -79,7 +92,7 @@ export function collectRepositorySnapshot(
   return {
     baseRef,
     headRef,
-    headSha: git(repositoryPath, ["rev-parse", headRef]).trim(),
+    headSha,
     changedFiles,
     diff,
     history,
