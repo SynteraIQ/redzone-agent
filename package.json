@@ -1,0 +1,20 @@
+{
+  "name": "redzone-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "analyze": "node --env-file-if-exists=.env src/cli.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.0",
+    "@mastra/core": "^1.53.0",
+    "ai": "^7.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}
