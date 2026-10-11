@@ -75,6 +75,18 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
     return `- [PR #${item.pullRequestNumber}: ${item.pullRequestTitle}](${item.commentUrl})` +
       ` · ${reviewSourceLabel(item.source)} · @${item.author}${path}${decision} · ${item.createdAt}${excerpt}`;
   });
+  const impactLines = analysis.impactGraph.status === "skipped"
+    ? [`- ${analysis.impactGraph.note}`]
+    : [
+        `- Parsed ${analysis.impactGraph.changedFiles.length} changed TypeScript files across ${analysis.impactGraph.filesScanned} tracked source files; found ${analysis.impactGraph.importEdges} import and re-export edges.`,
+        `- **Direct dependents:** ${analysis.impactGraph.directDependents.length > 0
+          ? analysis.impactGraph.directDependents.slice(0, 8).map((file) => `\`${file}\``).join(", ")
+          : "none found"}${analysis.impactGraph.directDependents.length > 8 ? `, and ${analysis.impactGraph.directDependents.length - 8} more` : ""}`,
+        `- **Transitive dependents:** ${analysis.impactGraph.transitiveDependents.length > 0
+          ? analysis.impactGraph.transitiveDependents.slice(0, 8).map((file) => `\`${file}\``).join(", ")
+          : "none found"}${analysis.impactGraph.transitiveDependents.length > 8 ? `, and ${analysis.impactGraph.transitiveDependents.length - 8} more` : ""}`,
+        `- ${analysis.impactGraph.note}`,
+      ];
 
   return [
     "# Red Zone analysis",
@@ -85,8 +97,13 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
     "## Current change",
     analysis.summary,
     "",
-    "## Agent interpretation",
-    analysis.rationale,
+    "## TypeScript import impact",
+    ...impactLines,
+    "",
+    "## Agent checks",
+    ...(analysis.agentTrace?.map((agent) =>
+      `- **${agent.name}** · ${agent.status} — ${compactText(agent.findings, 220)}`,
+    ) ?? ["Specialist delegation activity was not available for this run."]),
     "",
     "## Historical review evidence",
     ...(reviewLines.length > 0 ? reviewLines : ["No review evidence was cited by the agent."]),

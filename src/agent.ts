@@ -114,6 +114,7 @@ export async function analyzeSnapshot(
 
   return {
     ...result.object,
+    impactGraph,
     riskLevel: hasEvidence ? result.object.riskLevel : "insufficient-evidence",
     rationale: hasEvidence
       ? result.object.rationale
