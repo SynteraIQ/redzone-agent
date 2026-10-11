@@ -44,7 +44,8 @@ export async function POST(request: Request): Promise<Response> {
 
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
-      const snapshot = collectRepositorySnapshot(process.cwd(), baseRef);
+      const repositoryPath = process.env.REDZONE_REPOSITORY_PATH?.trim() || process.cwd();
+      const snapshot = collectRepositorySnapshot(repositoryPath, baseRef);
       if (snapshot.changedFiles.length === 0) {
         writer.write({ type: "text-start", id: "red-zone-report" });
         writer.write({ type: "text-delta", id: "red-zone-report", delta: `No changed files found between ${baseRef} and HEAD.` });
@@ -53,9 +54,14 @@ export async function POST(request: Request): Promise<Response> {
       }
 
       const reviewCollection = collectReviewEvidence(snapshot);
-      const analysis = await analyzeSnapshot(snapshot, reviewCollection.evidence, reviewCollection.coverage);
+      const analysis = await analyzeSnapshot(
+        snapshot,
+        reviewCollection.evidence,
+        reviewCollection.coverage,
+        repositoryPath,
+      );
       const report = formatAnalysisReport({
-        repositoryPath: process.cwd(),
+        repositoryPath,
         snapshot,
         analysis,
         reviewEvidence: reviewCollection.evidence.filter((item) =>

@@ -10,6 +10,13 @@ type AnalysisReportInput = {
   sourceCoverage: ReviewCoverage;
 };
 
+function compactText(value: string, maxCharacters: number): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length > maxCharacters
+    ? `${text.slice(0, maxCharacters - 1).trimEnd()}…`
+    : text;
+}
+
 function evidenceExcerpt(body: string): string {
   const reviewerText = body
     .split(/<details>\s*<summary>🤖 Prompt for AI Agents/i)[0]
@@ -101,9 +108,15 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
     ...impactLines,
     "",
     "## Agent checks",
+    `- **TypeScript Impact Analyzer** · ${analysis.impactGraph.status} — ${compactText(
+      analysis.impactGraph.status === "analyzed"
+        ? `${analysis.impactGraph.directDependents.length} direct and ${analysis.impactGraph.transitiveDependents.length} transitive dependent files found.`
+        : analysis.impactGraph.note,
+      220,
+    )}`,
     ...(analysis.agentTrace?.map((agent) =>
       `- **${agent.name}** · ${agent.status} — ${compactText(agent.findings, 220)}`,
-    ) ?? ["Specialist delegation activity was not available for this run."]),
+    ) ?? []),
     "",
     "## Historical review evidence",
     ...(reviewLines.length > 0 ? reviewLines : ["No review evidence was cited by the agent."]),
