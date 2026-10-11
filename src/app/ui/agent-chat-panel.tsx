@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { DefaultChatTransport } from "ai";
 import { useChat } from "@ai-sdk/react";
@@ -15,16 +15,30 @@ type AgentChatPanelProps = {
 
 export function AgentChatPanel({ agentId, agentName, active }: AgentChatPanelProps) {
   const [input, setInput] = useState("");
+  const pendingDraft = useRef<string | null>(null);
   const transport = useMemo(() => new DefaultChatTransport({ api: "/api/agent-chat", body: { agentId } }), [agentId]);
-  const { messages, sendMessage, status, error } = useChat<AgentChatUIMessage>({ transport });
+  const { messages, sendMessage, status, error } = useChat<AgentChatUIMessage>({
+    transport,
+    onError: () => {
+      // The chat SDK reports request failures here without rejecting sendMessage.
+      if (pendingDraft.current !== null) setInput(pendingDraft.current);
+    },
+  });
   const busy = status === "submitted" || status === "streaming";
 
   async function submitMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || pendingDraft.current !== null) return;
+    pendingDraft.current = text;
     setInput("");
-    await sendMessage({ text });
+    try {
+      await sendMessage({ text });
+    } catch {
+      setInput(text);
+    } finally {
+      pendingDraft.current = null;
+    }
   }
 
   return (

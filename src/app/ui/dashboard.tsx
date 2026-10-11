@@ -35,14 +35,23 @@ export function Dashboard({ repository, initialBaseRef, userName, signedIn, auth
   const [plan, setPlan] = useState<AnalysisPlanPreview | null>(null);
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [pullRequestUrl, setPullRequestUrl] = useState("");
+  const [posting, setPosting] = useState(false);
+  const [postFeedback, setPostFeedback] = useState<{ kind: "success" | "error"; message: string; url?: string } | null>(null);
   const transport = useMemo(() => new DefaultChatTransport({ api: "/api/analyze" }), []);
   const { messages, sendMessage, status, error } = useChat<AnalysisUIMessage>({ transport });
   const busy = status === "submitted" || status === "streaming";
   const latestAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant");
+  const latestReport = latestAssistantMessage?.parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("") ?? "";
+  const canPost = !posting && !busy && !(authConfigured && !signedIn) && Boolean(latestReport.trim() && pullRequestUrl.trim());
 
   async function runAnalysis(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!plan?.hasChanges) return;
+    setPostFeedback(null);
     await sendMessage({ text: `Analyze the current change against ${baseRef.trim()}` }, {
       body: {
         baseRef: plan.baseRef,
@@ -50,6 +59,32 @@ export function Dashboard({ repository, initialBaseRef, userName, signedIn, auth
         approvedAgentIds: plan.selectedAgentIds,
       },
     });
+  }
+
+  async function postSummary(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canPost) return;
+    setPostFeedback(null);
+    setPosting(true);
+    try {
+      const response = await fetch("/api/github-comment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pullRequestUrl: pullRequestUrl.trim(), summary: latestReport }),
+      });
+      const result = await response.json() as { commentUrl?: string; error?: string };
+      if (!response.ok || !result.commentUrl) {
+        throw new Error(result.error ?? "Could not post the summary.");
+      }
+      setPostFeedback({ kind: "success", message: "Summary posted to the pull request.", url: result.commentUrl });
+    } catch (postError) {
+      setPostFeedback({
+        kind: "error",
+        message: postError instanceof Error ? postError.message : "Could not post the summary.",
+      });
+    } finally {
+      setPosting(false);
+    }
   }
 
   async function createPlan() {
@@ -198,6 +233,34 @@ export function Dashboard({ repository, initialBaseRef, userName, signedIn, auth
                 {busy && !latestAssistantMessage && <div className="running-card"><span className="spinner" /><div><strong>Starting analysis</strong><span>Waiting for the first progress event.</span></div></div>}
               </div>
             )}
+            <form className="github-publish" onSubmit={postSummary}>
+              <div className="github-publish-copy">
+                <strong>Share this review on GitHub</strong>
+                <span>Post the latest Red Zone report as a PR summary comment.</span>
+              </div>
+              <div className="github-publish-controls">
+                <input
+                  type="url"
+                  aria-label="GitHub pull request URL"
+                  value={pullRequestUrl}
+                  onChange={(event) => { setPullRequestUrl(event.target.value); setPostFeedback(null); }}
+                  placeholder="https://github.com/owner/repo/pull/123"
+                  maxLength={512}
+                  required
+                  disabled={posting}
+                />
+                <button type="submit" disabled={!canPost}>
+                  {posting ? "Posting…" : <>Post summary <span>↗</span></>}
+                </button>
+              </div>
+              {postFeedback && (
+                <div className={`github-publish-feedback ${postFeedback.kind}`} role={postFeedback.kind === "error" ? "alert" : "status"}>
+                  {postFeedback.url
+                    ? <><span>{postFeedback.message}</span> <a href={postFeedback.url} target="_blank" rel="noreferrer">View comment</a></>
+                    : postFeedback.message}
+                </div>
+              )}
+            </form>
           </section>
           <footer className="page-footer"><span>RED ZONE AGENT</span><span>Historical review concerns are signals, not proof of production incidents.</span></footer>
         </div>
