@@ -26,10 +26,7 @@ function evidenceExcerpt(body: string): string {
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const maxCharacters = 280;
-  return excerpt.length > maxCharacters
-    ? `${excerpt.slice(0, maxCharacters - 1).trimEnd()}…`
-    : excerpt;
+  return compactText(excerpt, 180);
 }
 
 function reviewSourceLabel(source: ReviewEvidence["source"]): string {
@@ -72,15 +69,19 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
     ? "Insufficient evidence"
     : `${analysis.riskLevel[0].toUpperCase()}${analysis.riskLevel.slice(1)} historical signal`;
   const citedCommits = new Set(analysis.commitEvidenceHashes);
+  const workingTreeLine = snapshot.workingTreeFiles.length > 0
+    ? `**Uncommitted tracked files:** ${snapshot.workingTreeFiles.slice(0, 5).map((path) => `\`${path}\``).join(", ")}` +
+      (snapshot.workingTreeFiles.length > 5 ? `, and ${snapshot.workingTreeFiles.length - 5} more` : "")
+    : "**Uncommitted tracked files:** none";
   const commitLines = snapshot.history
     .filter((commit) => citedCommits.has(commit.hash))
-    .map((commit) => `- \`${commit.hash.slice(0, 12)}\` (${commit.date}) ${commit.subject}`);
-  const reviewLines = reviewEvidence.map((item) => {
+    .map((commit) => `- \`${commit.hash.slice(0, 12)}\` · ${commit.date} · ${compactText(commit.subject, 140)}`);
+  const reviewLines = reviewEvidence.slice(0, 3).map((item) => {
     const decision = item.decision ? ` · **${item.decision}**` : "";
     const path = item.path ? ` · \`${item.path}\`` : "";
-    const excerpt = item.source === "formal-review" ? "" : `\n  > ${evidenceExcerpt(item.body)}`;
-    return `- [PR #${item.pullRequestNumber}: ${item.pullRequestTitle}](${item.commentUrl})` +
-      ` · ${reviewSourceLabel(item.source)} · @${item.author}${path}${decision} · ${item.createdAt}${excerpt}`;
+    const excerpt = evidenceExcerpt(item.body);
+    return `- [PR #${item.pullRequestNumber}](${item.commentUrl}) · ${reviewSourceLabel(item.source)}${path}${decision}` +
+      (excerpt ? ` — ${excerpt}` : "");
   });
   const impactLines = analysis.impactGraph.status === "skipped"
     ? [`- ${analysis.impactGraph.note}`]
@@ -96,40 +97,38 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
       ];
 
   return [
-    "# Red Zone analysis",
+    "# Red Zone result",
     "",
-    `**Agent assessment:** ${riskLabel}`,
-    `**Repository:** \`${input.repositoryPath}\` · **Compared with:** \`${snapshot.baseRef}\``,
+    `**Risk:** ${riskLabel}  `,
+    `**Repository:** \`${input.repositoryPath}\` · **Base:** \`${snapshot.baseRef}\``,
+    workingTreeLine,
+    "Untracked files are not included in this analysis.",
     "",
-    "## Current change",
-    analysis.summary,
-    "",
-    "## TypeScript import impact",
-    ...impactLines,
+    "## Change",
+    compactText(analysis.summary, 360),
     "",
     "## Agent checks",
-    `- **TypeScript Impact Analyzer** · ${analysis.impactGraph.status} — ${compactText(
-      analysis.impactGraph.status === "analyzed"
-        ? `${analysis.impactGraph.directDependents.length} direct and ${analysis.impactGraph.transitiveDependents.length} transitive dependent files found.`
-        : analysis.impactGraph.note,
-      220,
-    )}`,
     ...(analysis.agentTrace?.map((agent) =>
       `- **${agent.name}** · ${agent.status} — ${compactText(agent.findings, 220)}`,
-    ) ?? []),
+    ) ?? ["Specialist delegation activity was not available for this run."]),
     "",
-    "## Historical review evidence",
-    ...(reviewLines.length > 0 ? reviewLines : ["No review evidence was cited by the agent."]),
+    "## Planner synthesis",
+    compactText(analysis.rationale, 900),
     "",
-    "## Prior commits cited",
-    ...(commitLines.length > 0 ? commitLines : ["No prior commits were cited by the agent."]),
+    "## Evidence",
+    ...commitLines.slice(0, 5),
+    ...reviewLines,
+    ...(commitLines.length > 5 ? [`- ${commitLines.length - 5} more cited commits omitted.`] : []),
+    ...(reviewEvidence.length > 3 ? [`- ${reviewEvidence.length - 3} more cited reviews omitted.`] : []),
+    ...(commitLines.length === 0 && reviewLines.length === 0 ? ["No historical evidence was cited."] : []),
     "",
-    "## Search coverage",
-    ...coverageLines(sourceCoverage).map((line) => `- ${line}`),
+    "## Coverage",
+    ...coverageLines(sourceCoverage).map((line) => `- ${compactText(line, 220)}`),
     "",
-    "Historical review concerns are not evidence of a production incident.",
     ...(analysis.followUpQuestions.length > 0
-      ? ["", "## Follow-up questions", ...analysis.followUpQuestions.map((question) => `- ${question}`)]
+      ? ["## Follow-up", ...analysis.followUpQuestions.slice(0, 3).map((question) => `- ${compactText(question, 180)}`)]
       : []),
+    "",
+    "Review concerns are signals, not proof of a production incident.",
   ].join("\n");
 }

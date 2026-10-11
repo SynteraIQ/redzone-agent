@@ -141,7 +141,7 @@ export function Dashboard({ repository, initialBaseRef, userName, signedIn, auth
                   const report = message.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
                   return <article className="report-card" key={message.id}><div className="report-card-header"><span className="report-status"><i /> ANALYSIS COMPLETE</span><span className="report-id">RUN {message.id.slice(0, 8).toUpperCase()}</span></div><div className="report-markdown"><ReactMarkdown>{report}</ReactMarkdown></div></article>;
                 })}
-                {busy && <div className="running-card"><span className="spinner" /><div><strong>Planner coordinating the agent team</strong><span>Parsing TypeScript dependencies, checking rollback history, reviewing prior feedback, then synthesizing the evidence.</span></div></div>}
+                {busy && <div className="running-card"><span className="spinner" /><div><strong>Planner coordinating the agent team</strong><span>Mapping the change, checking rollback history, reviewing prior feedback, then synthesizing the evidence.</span></div></div>}
               </div>
             )}
             <form className="github-publish" onSubmit={postSummary}>
