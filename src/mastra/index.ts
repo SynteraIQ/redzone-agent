@@ -1,8 +1,8 @@
 import { Mastra } from "@mastra/core";
-import { redZoneAgent } from "../agent.ts";
-import { changeScopeAgent } from "../agents/change-scope-agent.ts";
-import { rollbackHistoryAgent } from "../agents/rollback-history-agent.ts";
-import { reviewContextAgent } from "../agents/review-context-agent.ts";
+import { redZoneAgent } from "../agents/planner/index.ts";
+import { changeScopeAgent } from "../agents/change-scope/index.ts";
+import { rollbackHistoryAgent } from "../agents/rollback-history/index.ts";
+import { reviewContextAgent } from "../agents/review-context/index.ts";
 
 export const mastra = new Mastra({
   agents: {
