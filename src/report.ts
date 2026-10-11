@@ -1,6 +1,7 @@
 import type { RedZoneAnalysis } from "./agent.ts";
 import type { ReviewCoverage, ReviewEvidence } from "./github.ts";
 import type { RepositorySnapshot } from "./history.ts";
+import type { EvidenceReference } from "./analysis-evidence.ts";
 
 type AnalysisReportInput = {
   repositoryPath: string;
@@ -15,6 +16,18 @@ function compactText(value: string, maxCharacters: number): string {
   return text.length > maxCharacters
     ? `${text.slice(0, maxCharacters - 1).trimEnd()}…`
     : text;
+}
+
+function formatEvidenceReference(reference: EvidenceReference): string {
+  const label = compactText(reference.label, 180).replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
+  if (!reference.url) return label;
+  try {
+    const url = new URL(reference.url);
+    if (url.protocol !== "https:") return label;
+    return `[${label}](${url.toString()})`;
+  } catch {
+    return label;
+  }
 }
 
 function evidenceExcerpt(body: string): string {
@@ -108,12 +121,21 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
     compactText(analysis.summary, 360),
     "",
     "## Agent checks",
-    ...(analysis.agentTrace?.map((agent) =>
+    ...(analysis.agentTrace?.flatMap((agent) => [
       `- **${agent.name}** · ${agent.status} — ${compactText(agent.findings, 220)}`,
-    ) ?? ["Specialist delegation activity was not available for this run."]),
+      ...(agent.evidence.length > 0
+        ? [`  - Evidence: ${agent.evidence.map(formatEvidenceReference).join("; ")}`]
+        : []),
+      ...(agent.limitations.length > 0
+        ? [`  - Limits: ${agent.limitations.map((limitation) => compactText(limitation, 180)).join("; ")}`]
+        : []),
+    ]) ?? ["Specialist delegation activity was not available for this run."]),
     "",
     "## Planner synthesis",
     compactText(analysis.rationale, 900),
+    ...(analysis.synthesisEvidence.length > 0
+      ? [`Evidence: ${analysis.synthesisEvidence.map(formatEvidenceReference).join("; ")}`]
+      : ["Evidence: no historical sources were cited."]),
     "",
     "## Evidence",
     ...commitLines.slice(0, 5),
