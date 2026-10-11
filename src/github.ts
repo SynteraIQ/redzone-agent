@@ -36,6 +36,10 @@ export type ReviewCollection = {
   coverage: ReviewCoverage;
 };
 
+export type PostedPullRequestSummary = {
+  commentUrl: string;
+};
+
 type PullRequestRecord = {
   number: number;
   title: string;
@@ -92,6 +96,69 @@ function pullRequestLimit(): number {
     throw new Error("REDZONE_PR_LIMIT must be an integer from 1 to 100.");
   }
   return configuredLimit;
+}
+
+export async function postPullRequestSummary(
+  pullRequestUrl: string,
+  summary: string,
+): Promise<PostedPullRequestSummary> {
+  const repository = configuredRepository();
+  if (!repository) {
+    throw new Error("Set GH_REPO to the owner/repository allowed to receive comments.");
+  }
+
+  const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim();
+  if (!token) {
+    throw new Error("Set GITHUB_TOKEN or GH_TOKEN with permission to comment on pull requests.");
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(pullRequestUrl);
+  } catch {
+    throw new Error("Enter a valid GitHub pull request URL.");
+  }
+  const match = parsedUrl.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/([1-9]\d*)\/?$/);
+  if (
+    parsedUrl.protocol !== "https:" || parsedUrl.hostname !== "github.com" ||
+    parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash ||
+    !match || `${match[1]}/${match[2]}` !== repository
+  ) {
+    throw new Error(`Enter a pull request URL for the configured repository ${repository}.`);
+  }
+
+  const cleanSummary = summary.trim().replace(
+    /^\*\*Repository:\*\* `[^`]*`/m,
+    `**Repository:** \`${repository}\``,
+  );
+  if (!cleanSummary || cleanSummary.length > 30_000) {
+    throw new Error("The analysis summary must contain between 1 and 30,000 characters.");
+  }
+
+  const response = await fetch(
+    `https://api.github.com/repos/${repository}/issues/${match[3]}/comments`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ body: `<!-- redzone-agent-summary -->\n${cleanSummary}` }),
+      redirect: "error",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`GitHub could not post the summary (HTTP ${response.status}).`);
+  }
+
+  const result = await response.json() as { html_url?: string };
+  if (!result.html_url) {
+    throw new Error("GitHub accepted the comment but did not return its URL.");
+  }
+  return { commentUrl: result.html_url };
 }
 
 export function collectReviewEvidence(snapshot: RepositorySnapshot): ReviewCollection {

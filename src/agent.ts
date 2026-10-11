@@ -5,6 +5,7 @@ import { rollbackHistoryAgent } from "./agents/rollback-history-agent.ts";
 import { reviewContextAgent } from "./agents/review-context-agent.ts";
 import type { CommitEvidence, RepositorySnapshot } from "./history.ts";
 import type { ReviewCoverage, ReviewEvidence } from "./github.ts";
+import { runSpecialistAgents } from "./agents/specialists.ts";
 
 const AnalysisSchema = z.object({
   summary: z.string(),
@@ -72,6 +73,7 @@ export async function analyzeSnapshot(
   snapshot: RepositorySnapshot,
   reviewEvidence: ReviewEvidence[],
   sourceCoverage?: ReviewCoverage,
+  repositoryPath = process.cwd(),
 ): Promise<RedZoneAnalysis> {
   const candidateChange = {
     baseRef: snapshot.baseRef,
@@ -186,6 +188,7 @@ export async function analyzeSnapshot(
   const hasEvidence = commitEvidenceHashes.length > 0 || reviewEvidenceIds.length > 0;
   return {
     ...result.object,
+    impactGraph,
     riskLevel: hasEvidence ? result.object.riskLevel : "insufficient-evidence",
     rationale: hasEvidence
       ? result.object.rationale

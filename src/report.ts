@@ -83,6 +83,18 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
     return `- [PR #${item.pullRequestNumber}](${item.commentUrl}) · ${reviewSourceLabel(item.source)}${path}${decision}` +
       (excerpt ? ` — ${excerpt}` : "");
   });
+  const impactLines = analysis.impactGraph.status === "skipped"
+    ? [`- ${analysis.impactGraph.note}`]
+    : [
+        `- Parsed ${analysis.impactGraph.changedFiles.length} changed TypeScript files across ${analysis.impactGraph.filesScanned} tracked source files; found ${analysis.impactGraph.importEdges} import and re-export edges.`,
+        `- **Direct dependents:** ${analysis.impactGraph.directDependents.length > 0
+          ? analysis.impactGraph.directDependents.slice(0, 8).map((file) => `\`${file}\``).join(", ")
+          : "none found"}${analysis.impactGraph.directDependents.length > 8 ? `, and ${analysis.impactGraph.directDependents.length - 8} more` : ""}`,
+        `- **Transitive dependents:** ${analysis.impactGraph.transitiveDependents.length > 0
+          ? analysis.impactGraph.transitiveDependents.slice(0, 8).map((file) => `\`${file}\``).join(", ")
+          : "none found"}${analysis.impactGraph.transitiveDependents.length > 8 ? `, and ${analysis.impactGraph.transitiveDependents.length - 8} more` : ""}`,
+        `- ${analysis.impactGraph.note}`,
+      ];
 
   return [
     "# Red Zone result",
