@@ -79,9 +79,18 @@ export async function analyzeSnapshot(
     changedFiles: snapshot.changedFiles,
     diff: snapshot.diff,
   };
+  const maxPromptBytes = 256 * 1024;
+  const candidatePrompt = JSON.stringify({ candidateChange });
+  const candidateBytes = Buffer.byteLength(candidatePrompt, "utf8");
+  if (candidateBytes > maxPromptBytes) {
+    throw new Error(
+      `Analysis input is too large (${candidateBytes} bytes; maximum ${maxPromptBytes}). ` +
+      "Use a smaller change or reduce the available historical review evidence before retrying.",
+    );
+  }
   const scopeRun = await runSpecialist(
     changeScopeAgent,
-    JSON.stringify({ candidateChange }),
+    candidatePrompt,
   );
   const scopeContext = scopeRun.findings;
   const rollbackEvidence = snapshot.history.filter(hasRollbackSignal);
@@ -121,7 +130,6 @@ export async function analyzeSnapshot(
   // Bound the entire serialized input, including JSON escaping and metadata.
   // Diffs plus GitHub evidence can legitimately exceed 64 KiB. Keep a bounded
   // request while allowing normal multi-file changes and their review context.
-  const maxPromptBytes = 256 * 1024;
   let prompt = serializePrompt(reviewEvidence);
   if (Buffer.byteLength(prompt, "utf8") > maxPromptBytes) {
     // Shorten only bodies so every review's decision and provenance remain available.
