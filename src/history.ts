@@ -58,10 +58,11 @@ export function collectRepositorySnapshot(
     .filter(Boolean);
   const changedFiles = [...new Set([...committedFiles, ...workingTreeFiles])];
   const diff = changedFiles.length
-    ? git(repositoryPath, ["diff", "--no-ext-diff", mergeBase, "--", ...changedFiles])
+    ? git(repositoryPath, ["--literal-pathspecs", "diff", "--no-ext-diff", mergeBase, "--", ...changedFiles])
     : "";
   const rawHistory = changedFiles.length
     ? git(repositoryPath, [
+        "--literal-pathspecs",
         "log",
         `-${historyLimit}`,
         "--date=short",
