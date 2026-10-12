@@ -1,4 +1,5 @@
 import type { UIMessage } from "ai";
+import type { EvidenceReference } from "./analysis-evidence.ts";
 
 export type AnalysisProgressStage =
   | "snapshot"
@@ -16,6 +17,8 @@ export type AnalysisProgressEvent = {
   status: "running" | "completed" | "skipped" | "failed";
   label: string;
   detail?: string;
+  evidence?: EvidenceReference[];
+  limitations?: string[];
 };
 
 export type AgentChatRouteEvent = {
