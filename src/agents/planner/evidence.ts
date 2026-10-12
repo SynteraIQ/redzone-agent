@@ -40,18 +40,42 @@ export function createEvidenceReferences(
       kind: "change" as const,
       label: `Changed file: ${filePath}`,
       url: githubFileUrl(snapshot, filePath),
+      provenance: {
+        source: "git-diff" as const,
+        revision: snapshot.headSha,
+        baseRef: snapshot.baseRef,
+        baseRevision: snapshot.mergeBaseSha,
+        paths: [filePath],
+        includesWorkingTree: snapshot.workingTreeFiles.includes(filePath),
+      },
     })),
     ...impactGraph.directDependents.slice(0, 50).map((filePath) => ({
       id: `impact:direct:${filePath}`,
       kind: "impact" as const,
       label: `Direct dependent: ${filePath}`,
       url: githubFileUrl(snapshot, filePath),
+      provenance: {
+        source: "static-analysis" as const,
+        revision: snapshot.headSha,
+        baseRef: snapshot.baseRef,
+        baseRevision: snapshot.mergeBaseSha,
+        paths: [filePath],
+        includesWorkingTree: snapshot.workingTreeFiles.length > 0,
+      },
     })),
     ...impactGraph.transitiveDependents.slice(0, 50).map((filePath) => ({
       id: `impact:transitive:${filePath}`,
       kind: "impact" as const,
       label: `Transitive dependent: ${filePath}`,
       url: githubFileUrl(snapshot, filePath),
+      provenance: {
+        source: "static-analysis" as const,
+        revision: snapshot.headSha,
+        baseRef: snapshot.baseRef,
+        baseRevision: snapshot.mergeBaseSha,
+        paths: [filePath],
+        includesWorkingTree: snapshot.workingTreeFiles.length > 0,
+      },
     })),
   ];
   const repository = process.env.GH_REPO?.trim();
@@ -60,6 +84,12 @@ export function createEvidenceReferences(
     kind: "commit",
     label: `Commit ${commit.hash.slice(0, 12)}: ${commit.subject.slice(0, 360)}`,
     url: githubCommitUrl(repository, commit.hash),
+    provenance: {
+      source: "git-history" as const,
+      revision: commit.hash,
+      date: commit.date,
+      paths: commit.files.slice(0, 100),
+    },
   }));
   const rollbackHashes = new Set(rollbackEvidence.map((commit) => commit.hash));
   const rollbackEvidenceReferences = historyEvidenceReferences
@@ -69,6 +99,12 @@ export function createEvidenceReferences(
     kind: "review",
     label: `PR #${review.pullRequestNumber} · ${review.source}${review.path ? ` · ${review.path}` : ""}`,
     url: review.commentUrl,
+    provenance: {
+      source: "github-review" as const,
+      revision: review.commitId,
+      date: review.createdAt,
+      paths: review.path ? [review.path] : undefined,
+    },
   }));
   return {
     candidateEvidence,

@@ -19,7 +19,19 @@ function compactText(value: string, maxCharacters: number): string {
 }
 
 function formatEvidenceReference(reference: EvidenceReference): string {
-  const label = compactText(reference.label, 180).replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
+  const revision = reference.provenance.revision
+    ? ` · ${reference.provenance.revision.slice(0, 12)}`
+    : "";
+  const baseRef = reference.provenance.baseRef ? ` · base ${reference.provenance.baseRef}` : "";
+  const baseRevision = reference.provenance.baseRevision
+    ? ` (${reference.provenance.baseRevision.slice(0, 12)})`
+    : "";
+  const date = reference.provenance.date ? ` · ${reference.provenance.date}` : "";
+  const workingTree = reference.provenance.includesWorkingTree ? " · includes working tree" : "";
+  const label = compactText(
+    `${reference.label} (${reference.provenance.source}${revision}${baseRef}${baseRevision}${date}${workingTree})`,
+    260,
+  ).replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
   if (!reference.url) return label;
   try {
     const url = new URL(reference.url);
