@@ -84,6 +84,14 @@ export async function synthesizeAnalysis(input: SynthesisInput): Promise<RedZone
 
   await reportProgress({ stage: "synthesis", status: "running", label: "Red Zone Planner synthesis" });
   const result = await redZoneAgent.generate(prompt, {
+    instructions: [
+      "Assess regression risk from the concrete behavior changed, not from the number of dependency edges.",
+      "A shared file path makes a historical commit a candidate for review; it does not by itself prove the same behavior or a prior regression.",
+      "Use only prior commits or review comments that materially relate to the changed behavior. If none do, say historical evidence is insufficient.",
+      "High or medium risk requires a specific, directly relevant historical signal and a clear explanation of how it relates to this diff.",
+      "Keep the summary and rationale concise. Cite at most five relevant historical sources.",
+      "Ask at most three follow-up questions, only when the answer could change the assessment. Avoid generic testing or documentation questions.",
+    ].join(" "),
     structuredOutput: { schema: AnalysisSchema },
   });
   if (!result.object) {
@@ -97,9 +105,19 @@ export async function synthesizeAnalysis(input: SynthesisInput): Promise<RedZone
   });
 
   const knownHashes = new Set(snapshot.history.map((commit) => commit.hash));
-  const commitEvidenceHashes = result.object.commitEvidenceHashes.filter((hash) => knownHashes.has(hash));
+  const citedCommits = [...new Set(result.object.commitEvidenceHashes.filter((hash) => knownHashes.has(hash)))];
   const knownReviewIds = new Set(reviewEvidence.map((item) => item.id));
-  const reviewEvidenceIds = result.object.reviewEvidenceIds.filter((id) => knownReviewIds.has(id));
+  const citedReviews = [...new Set(result.object.reviewEvidenceIds.filter((id) => knownReviewIds.has(id)))];
+  const selectedHistoricalEvidence = [
+    ...citedCommits.map((hash) => ({ kind: "commit" as const, id: hash })),
+    ...citedReviews.map((id) => ({ kind: "review" as const, id })),
+  ].slice(0, 5);
+  const commitEvidenceHashes = selectedHistoricalEvidence
+    .filter((item) => item.kind === "commit")
+    .map((item) => item.id);
+  const reviewEvidenceIds = selectedHistoricalEvidence
+    .filter((item) => item.kind === "review")
+    .map((item) => item.id);
   const synthesisEvidenceIds = new Set([
     ...commitEvidenceHashes.map((hash) => `commit:${hash}`),
     ...reviewEvidenceIds.map((id) => `review:${id}`),
@@ -112,6 +130,7 @@ export async function synthesizeAnalysis(input: SynthesisInput): Promise<RedZone
 
   return {
     ...result.object,
+    followUpQuestions: [...new Set(result.object.followUpQuestions)].slice(0, 3),
     impactGraph: context.impactGraph,
     synthesisEvidence,
     riskLevel: hasHistoricalEvidence ? result.object.riskLevel : "insufficient-evidence",

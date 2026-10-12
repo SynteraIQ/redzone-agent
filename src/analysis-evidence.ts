@@ -11,7 +11,7 @@ export type EvidenceReference = z.infer<typeof EvidenceReferenceSchema>;
 
 export const GroundedAgentFindingSchema = z.object({
   summary: z.string().min(1).max(1200),
-  evidenceIds: z.array(z.string().min(1).max(300)).max(12),
+  evidenceIds: z.array(z.string().min(1).max(300)),
   limitations: z.array(z.string().min(1).max(240)).max(4),
 });
 
