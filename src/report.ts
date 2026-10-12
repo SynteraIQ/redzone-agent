@@ -28,10 +28,10 @@ function formatEvidenceReference(reference: EvidenceReference): string {
     : "";
   const date = reference.provenance.date ? ` · ${reference.provenance.date}` : "";
   const workingTree = reference.provenance.includesWorkingTree ? " · includes working tree" : "";
-  const label = compactText(
-    `${reference.label} (${reference.provenance.source}${revision}${baseRef}${baseRevision}${date}${workingTree})`,
-    260,
-  ).replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
+  const provenance = ` (${reference.provenance.source}${revision}${baseRef}${baseRevision}${date}${workingTree})`;
+  const labelBudget = Math.max(0, 260 - provenance.length);
+  const label = `${labelBudget > 0 ? compactText(reference.label, labelBudget) : ""}${provenance}`
+    .replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
   if (!reference.url) return label;
   try {
     const url = new URL(reference.url);
