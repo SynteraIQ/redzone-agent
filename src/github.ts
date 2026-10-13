@@ -46,9 +46,23 @@ type PullRequestRecord = {
   html_url: string;
   user?: { login?: string };
   created_at: string;
+  updated_at?: string;
+  draft?: boolean;
+  labels?: Array<{ name?: string }>;
   head: { sha: string };
   state: "open" | "closed";
   merged_at: string | null;
+};
+
+export type OpenPullRequest = {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+  draft: boolean;
+  labels: string[];
 };
 
 type PullRequestFile = { filename: string };
@@ -466,4 +480,32 @@ export async function collectExpertMap(
     mayHaveMorePullRequests: pullRequests.length >= limit,
     records: scans.flatMap((scan) => scan.records),
   };
+}
+
+export async function collectOpenPullRequests(
+  repository: string,
+  token: string,
+): Promise<OpenPullRequest[]> {
+  const normalizedRepository = configuredRepository(repository);
+  if (!normalizedRepository) throw new Error("Choose a repository before scanning pull requests.");
+  const records: PullRequestRecord[] = [];
+  for (let page = 1; page <= 100; page++) {
+    const pageRecords = await githubJson<PullRequestRecord[]>(
+      `repos/${normalizedRepository}/pulls?state=open&sort=updated&direction=asc&per_page=100&page=${page}`,
+      token,
+    );
+    records.push(...pageRecords);
+    if (pageRecords.length < 100) break;
+    if (page === 100) throw new Error("The repository has more than 10,000 open pull requests; the stale scan stopped at the GitHub API pagination limit.");
+  }
+  return records.map((record) => ({
+    number: record.number,
+    title: record.title,
+    url: record.html_url,
+    author: record.user?.login ?? "unknown",
+    createdAt: record.created_at,
+    updatedAt: record.updated_at ?? record.created_at,
+    draft: record.draft ?? false,
+    labels: (record.labels ?? []).flatMap((label) => label.name ? [label.name] : []),
+  }));
 }
