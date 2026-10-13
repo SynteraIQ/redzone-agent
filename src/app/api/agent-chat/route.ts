@@ -7,7 +7,7 @@ import { changeScopeAgent } from "../../../agents/change-scope/index.ts";
 import { redZoneAgent, routePlannerChat } from "../../../agents/planner/index.ts";
 import { reviewContextAgent } from "../../../agents/review-context/index.ts";
 import { rollbackHistoryAgent } from "../../../agents/rollback-history/index.ts";
-import { authOptions, googleCredentialsConfigured } from "../../../auth.ts";
+import { authOptions, githubOAuthConfigured } from "../../../auth.ts";
 import { isAgentId, type AgentId } from "../../../agent-catalog.ts";
 import type { AgentChatUIMessage } from "../../../analysis-progress.ts";
 
@@ -27,11 +27,11 @@ const agents = {
 } as const;
 
 export async function POST(request: Request): Promise<Response> {
-  if (googleCredentialsConfigured && !(await getServerSession(authOptions))) {
-    return Response.json({ error: "Sign in with Google to chat with an agent." }, { status: 401 });
+  if (githubOAuthConfigured && !(await getServerSession(authOptions))) {
+    return Response.json({ error: "Sign in with GitHub to chat with an agent." }, { status: 401 });
   }
-  if (process.env.NODE_ENV === "production" && !googleCredentialsConfigured) {
-    return Response.json({ error: "Google OAuth is not configured." }, { status: 503 });
+  if (process.env.NODE_ENV === "production" && !githubOAuthConfigured) {
+    return Response.json({ error: "GitHub App sign-in is not configured." }, { status: 503 });
   }
   if (!process.env.OPENAI_API_KEY) {
     return Response.json({ error: "Set OPENAI_API_KEY before chatting with an agent." }, { status: 503 });

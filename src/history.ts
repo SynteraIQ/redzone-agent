@@ -25,6 +25,16 @@ function git(repositoryPath: string, args: string[]): string {
   });
 }
 
+export function getGitHubOriginRepository(repositoryPath: string): string | undefined {
+  try {
+    const remote = git(repositoryPath, ["config", "--get", "remote.origin.url"]).trim();
+    const match = remote.match(/(?:github\.com[:/])([^/]+\/[^/]+?)(?:\.git)?$/i);
+    return match?.[1]?.replace(/\.git$/i, "");
+  } catch {
+    return undefined;
+  }
+}
+
 export function collectRepositorySnapshot(
   repositoryPath: string,
   baseRef: string,

@@ -19,9 +19,10 @@ export async function analyzeSnapshot(
   repositoryPath = process.cwd(),
   onProgress?: (event: AnalysisProgressEvent) => void | Promise<void>,
   approvedAgentIds?: SpecialistAgentId[],
+  githubRepository?: string,
 ): Promise<RedZoneAnalysis> {
   const reportProgress = async (event: AnalysisProgressEvent) => await onProgress?.(event);
-  const context = await prepareAnalysisContext(snapshot, reviewEvidence, repositoryPath, reportProgress);
+  const context = await prepareAnalysisContext(snapshot, reviewEvidence, repositoryPath, reportProgress, githubRepository);
   await reportProgress({
     stage: "planning",
     status: "running",

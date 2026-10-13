@@ -1,13 +1,36 @@
-import { basename } from "node:path";
+import { cookies } from "next/headers";
 import { getServerSession } from "next-auth";
-import { authOptions, googleCredentialsConfigured } from "../../auth.ts";
+import { redirect } from "next/navigation";
+import { authOptions, githubOAuthConfigured } from "../../auth.ts";
+import {
+  GITHUB_INSTALLATION_COOKIE,
+  GITHUB_REPOSITORY_COOKIE,
+  isGitHubAppConfigured,
+  readInstallationCookie,
+  readSelectedRepositoryCookie,
+} from "../../github-app.ts";
 import { AgentWorkspace } from "../ui/agent-workspace";
 import { Sidebar } from "../ui/sidebar";
 
 export default async function AgentsPage() {
-  const session = googleCredentialsConfigured ? await getServerSession(authOptions) : null;
-  const repositoryPath = process.env.REDZONE_REPOSITORY_PATH?.trim();
-  const repository = process.env.GH_REPO ?? (repositoryPath ? basename(repositoryPath) : "Set GH_REPO to show repository");
+  const session = githubOAuthConfigured ? await getServerSession(authOptions) : null;
+  const localDeveloperMode = process.env.NODE_ENV !== "production" && process.env.REDZONE_DEV_MODE === "true";
+  if (!session && !localDeveloperMode) redirect("/login");
+  const cookieStore = await cookies();
+  const installationId = session?.user?.id
+    ? readInstallationCookie(
+      cookieStore.get(GITHUB_INSTALLATION_COOKIE)?.value,
+      session.user.id,
+    )
+    : null;
+  const githubAppConnected = Boolean(installationId);
+  const repository = session?.user?.id && installationId
+    ? readSelectedRepositoryCookie(
+      cookieStore.get(GITHUB_REPOSITORY_COOKIE)?.value,
+      session.user.id,
+      installationId,
+    ) ?? "Select a repository"
+    : "Select a repository";
 
   return (
     <main className="app-shell">
@@ -15,7 +38,9 @@ export default async function AgentsPage() {
         repository={repository}
         userName={session?.user?.name ?? null}
         signedIn={Boolean(session)}
-        authConfigured={googleCredentialsConfigured}
+        authConfigured={githubOAuthConfigured}
+        githubAppConfigured={isGitHubAppConfigured()}
+        githubAppConnected={githubAppConnected}
         activePage="agents"
       />
       <section className="main-panel">

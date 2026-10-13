@@ -1,22 +1,24 @@
 import { getServerSession } from "next-auth";
+import { NextRequest } from "next/server";
 import { z } from "zod";
-import { authOptions, googleCredentialsConfigured } from "../../../../auth.ts";
+import { authOptions, githubOAuthConfigured } from "../../../../auth.ts";
 import { createAnalysisPlan } from "../../../../agents/planner/index.ts";
 import { createSnapshotFingerprint, isValidBaseRef } from "../../../../analysis-plan.ts";
 import { collectReviewEvidence } from "../../../../github.ts";
-import { collectRepositorySnapshot } from "../../../../history.ts";
+import { getInstallationTokenForRequest, getSelectedRepositoryForRequest } from "../../../../github-app.ts";
+import { collectRepositorySnapshot, getGitHubOriginRepository } from "../../../../history.ts";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const PlanRequestSchema = z.object({ baseRef: z.string().trim().min(1).max(100) });
 
-export async function POST(request: Request): Promise<Response> {
-  if (googleCredentialsConfigured && !(await getServerSession(authOptions))) {
-    return Response.json({ error: "Sign in with Google to create an analysis plan." }, { status: 401 });
+export async function POST(request: NextRequest): Promise<Response> {
+  if (githubOAuthConfigured && !(await getServerSession(authOptions))) {
+    return Response.json({ error: "Sign in with GitHub to create an analysis plan." }, { status: 401 });
   }
-  if (process.env.NODE_ENV === "production" && !googleCredentialsConfigured) {
-    return Response.json({ error: "Google OAuth is not configured." }, { status: 503 });
+  if (process.env.NODE_ENV === "production" && !githubOAuthConfigured) {
+    return Response.json({ error: "GitHub App sign-in is not configured." }, { status: 503 });
   }
   if (!process.env.OPENAI_API_KEY) {
     return Response.json({ error: "Set OPENAI_API_KEY before creating an analysis plan." }, { status: 503 });
@@ -37,12 +39,21 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    const repositoryPath = process.env.REDZONE_REPOSITORY_PATH?.trim() || process.cwd();
+    const repositoryPath = process.cwd();
+    const localRepository = getGitHubOriginRepository(repositoryPath);
+    if (!localRepository) {
+      throw new Error("Could not identify the current checkout's GitHub origin. Run RedZone from a GitHub checkout.");
+    }
     const snapshot = collectRepositorySnapshot(repositoryPath, parsed.data.baseRef);
     const snapshotFingerprint = createSnapshotFingerprint(snapshot);
-    const reviewCollection = collectReviewEvidence(snapshot);
+    const selectedRepository = await getSelectedRepositoryForRequest(request);
+    if (localRepository.toLowerCase() !== selectedRepository.toLowerCase()) {
+      throw new Error(`Selected repository ${selectedRepository} does not match the local checkout origin ${localRepository}.`);
+    }
+    const githubToken = await getInstallationTokenForRequest(request);
+    const reviewCollection = await collectReviewEvidence(snapshot, githubToken, selectedRepository);
     const plan = snapshot.changedFiles.length > 0
-      ? await createAnalysisPlan(snapshot, reviewCollection.evidence, reviewCollection.coverage, repositoryPath)
+      ? await createAnalysisPlan(snapshot, reviewCollection.evidence, reviewCollection.coverage, repositoryPath, selectedRepository)
       : {
           availableAgentIds: [],
           selectedAgentIds: [],
