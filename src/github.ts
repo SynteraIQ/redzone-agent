@@ -496,7 +496,7 @@ export async function collectOpenPullRequests(
     let pageRecords: PullRequestRecord[];
     try {
       pageRecords = await githubJson<PullRequestRecord[]>(
-        `repos/${normalizedRepository}/pulls?state=open&sort=updated&direction=asc&per_page=100&page=${page}`,
+        `repos/${normalizedRepository}/pulls?state=open&sort=created&direction=asc&per_page=100&page=${page}`,
         token,
       );
     } catch (error) {

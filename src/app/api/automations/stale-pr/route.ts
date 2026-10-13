@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { NextRequest } from "next/server";
 import { authOptions, githubOAuthConfigured } from "../../../../auth.ts";
 import { collectOpenPullRequests } from "../../../../github.ts";
-import { getInstallationTokenForRequest, getSelectedRepositoryForRequest } from "../../../../github-app.ts";
+import { getInstallationTokenForRequest, getSelectedRepositoryForRequest, RepositorySelectionError } from "../../../../github-app.ts";
 import { getGitHubOriginRepository } from "../../../../history.ts";
 import { StalePullRequestRunSchema } from "../../../../automations/stale-pr/schema.ts";
 import { buildStalePullRequestWorkflowResult } from "../../../../automations/stale-pr/workflow.ts";
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     const selectedRepository = await getSelectedRepositoryForRequest(request);
     repository = selectedRepository;
     if (selectedRepository.toLowerCase() !== localRepository.toLowerCase()) {
-      throw new Error(`Selected repository ${selectedRepository} does not match the current checkout origin ${localRepository}.`);
+      throw new RepositorySelectionError(`Selected repository ${selectedRepository} does not match the current checkout origin ${localRepository}.`);
     }
     stage = "create-installation-token";
     const token = await getInstallationTokenForRequest(request);
@@ -64,13 +64,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     response.headers.set("Cache-Control", "private, no-store");
     return response;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not scan stale pull requests.";
+    const expectedError = error instanceof RepositorySelectionError;
+    const message = expectedError ? error.message : "Could not scan stale pull requests.";
     console.error("[redzone:stale-pr] Run failed", {
       requestId,
       repository,
       stage,
       error: error instanceof Error ? { name: error.name, message: error.message } : "Unknown automation error",
     });
-    return Response.json({ error: message, requestId }, { status: 400 });
+    return Response.json({ error: message, requestId }, { status: expectedError ? 400 : 500 });
   }
 }

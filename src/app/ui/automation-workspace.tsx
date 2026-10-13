@@ -44,7 +44,8 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ staleAfterDays: threshold, includeDrafts }),
       });
-      const payload = await response.json() as StalePullRequestResponse;
+      const payload = await response.json().catch(() => null) as StalePullRequestResponse | null;
+      if (!payload) throw new Error("Could not run this automation.");
       if (!response.ok) {
         const requestReference = payload.requestId ? ` (request ${payload.requestId})` : "";
         throw new Error(`${payload.error ?? "Could not run this automation."}${requestReference}`);
