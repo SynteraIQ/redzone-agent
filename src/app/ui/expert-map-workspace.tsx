@@ -47,7 +47,7 @@ function ContributorCard({ contributor }: { contributor: ExpertContributorSummar
 }
 
 function codeOwnerLink(owner: string) {
-  if (!owner.startsWith("@")) return null;
+  if (!owner.startsWith("@")) return <span key={owner}>{owner}</span>;
   const account = owner.slice(1);
   const [organization, team] = account.split("/");
   const href = team

@@ -31,7 +31,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Sign in with GitHub to chat with an agent." }, { status: 401 });
   }
   if (process.env.NODE_ENV === "production" && !githubOAuthConfigured) {
-    return Response.json({ error: "GitHub App sign-in is not configured." }, { status: 503 });
+    return Response.json({ error: "GitHub OAuth sign-in is not configured." }, { status: 503 });
   }
   if (!process.env.OPENAI_API_KEY) {
     return Response.json({ error: "Set OPENAI_API_KEY before chatting with an agent." }, { status: 503 });

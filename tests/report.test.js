@@ -2,23 +2,27 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { formatAnalysisReport } from "../src/report.ts";
 
-function reportReferenceLabels(reference) {
-  const report = formatAnalysisReport({
+function reportForReference(reference, reviewEvidence = []) {
+  return formatAnalysisReport({
     repositoryPath: "/repo",
     snapshot: { baseRef: "main", workingTreeFiles: [], history: [] },
-    reviewEvidence: [],
+    reviewEvidence,
     sourceCoverage: { githubConfigured: false },
     analysis: {
       summary: "Summary", riskLevel: "low", rationale: "Rationale",
-      commitEvidenceHashes: [], followUpQuestions: [],
+      commitEvidenceHashes: [], reviewEvidenceIds: [], followUpQuestions: [],
       impactGraph: { status: "skipped", note: "No impact analysis" },
       synthesisEvidence: [reference],
       agentTrace: [{
-        name: "Agent", status: "completed", findings: "Finding",
+        name: "Review Context Agent", status: "completed", findings: "Finding",
         evidence: [reference], limitations: [],
       }],
     },
   });
+}
+
+function reportReferenceLabels(reference) {
+  const report = reportForReference(reference);
   return report.split("\n")
     .filter((line) => /^(?:  - )?Evidence: /.test(line))
     .map((line) => {
@@ -62,4 +66,29 @@ test("preserves provenance when it consumes the entire reference label budget", 
   const suffix = ` (${source} · base ${baseRef})`;
   const labels = reportReferenceLabels({ label: "Description", provenance: { source, baseRef } });
   assert.deepEqual(labels, [suffix, suffix]);
+});
+
+test("formats change and impact references without provenance", () => {
+  for (const kind of ["change", "impact"]) {
+    for (const url of [undefined, "https://example.invalid/file"]) {
+      const label = `${kind}: src/[file].ts ` + "x".repeat(300);
+      const labels = reportReferenceLabels({ id: `${kind}:file`, kind, label, url });
+      assert.deepEqual(labels, [label.slice(0, 259) + "…", label.slice(0, 259) + "…"]);
+    }
+  }
+});
+
+test("formats reviewer suggestion references without provenance", () => {
+  const review = {
+    id: "review-1", source: "inline-review", author: "reviewer", body: "Feedback",
+    pullRequestNumber: 42, path: "src/file.ts", createdAt: "2026-10-13",
+    commentUrl: "https://example.invalid/review/1",
+  };
+  const report = reportForReference({
+    id: "review:review-1", kind: "review", label: "Relevant review",
+    provenance: { source: "github-review", date: review.createdAt },
+  }, [review]);
+  assert.ok(report.includes("- [@reviewer](https://github.com/reviewer)"));
+  assert.ok(report.includes("  - Basis: [PR \\#42 inline review · src/file\\.ts](https://example.invalid/review/1)"));
+  assert.ok(!report.includes("undefined"));
 });

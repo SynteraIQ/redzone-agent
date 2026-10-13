@@ -46,13 +46,14 @@ function parseCodeowners(contents: string): CodeOwnerRule[] {
     .filter((line) => line.length > 0 && !line.startsWith("#"))
     .flatMap((line) => {
       const [pattern, ...owners] = line.split(/\s+/);
-      return pattern && owners.length > 0 ? [{ pattern, owners }] : [];
+      return pattern ? [{ pattern, owners }] : [];
     });
 }
 
 function globPatternMatches(pattern: string, filePath: string): boolean {
+  const anchored = pattern.startsWith("/");
   let source = pattern.replace(/^\//, "");
-  const matchAtAnyDepth = !source.includes("/");
+  const matchAtAnyDepth = !anchored && !source.replace(/\/$/, "").includes("/");
   if (source.endsWith("/")) source += "**";
   let expression = "";
   for (let index = 0; index < source.length; index++) {

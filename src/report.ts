@@ -19,17 +19,21 @@ function compactText(value: string, maxCharacters: number): string {
     : text;
 }
 
-function formatEvidenceReference(reference: EvidenceReference): string {
-  const revision = reference.provenance.revision
+function formatEvidenceReference(
+  reference: Omit<EvidenceReference, "provenance"> & { provenance?: EvidenceReference["provenance"] },
+): string {
+  const revision = reference.provenance?.revision
     ? ` · ${reference.provenance.revision.slice(0, 12)}`
     : "";
-  const baseRef = reference.provenance.baseRef ? ` · base ${reference.provenance.baseRef}` : "";
-  const baseRevision = reference.provenance.baseRevision
+  const baseRef = reference.provenance?.baseRef ? ` · base ${reference.provenance.baseRef}` : "";
+  const baseRevision = reference.provenance?.baseRevision
     ? ` (${reference.provenance.baseRevision.slice(0, 12)})`
     : "";
-  const date = reference.provenance.date ? ` · ${reference.provenance.date}` : "";
-  const workingTree = reference.provenance.includesWorkingTree ? " · includes working tree" : "";
-  const provenance = ` (${reference.provenance.source}${revision}${baseRef}${baseRevision}${date}${workingTree})`;
+  const date = reference.provenance?.date ? ` · ${reference.provenance.date}` : "";
+  const workingTree = reference.provenance?.includesWorkingTree ? " · includes working tree" : "";
+  const provenance = reference.provenance
+    ? ` (${reference.provenance.source}${revision}${baseRef}${baseRevision}${date}${workingTree})`
+    : "";
   const labelBudget = Math.max(0, 260 - provenance.length);
   const label = `${labelBudget > 0 ? compactText(reference.label, labelBudget) : ""}${provenance}`
     .replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
