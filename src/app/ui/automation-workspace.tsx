@@ -12,6 +12,7 @@ type AutomationWorkspaceProps = {
 
 type StalePullRequestResponse = StalePullRequestWorkflowResult & {
   repository: string;
+  requestId?: string;
   error?: string;
 };
 
@@ -44,7 +45,10 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
         body: JSON.stringify({ staleAfterDays: threshold, includeDrafts }),
       });
       const payload = await response.json() as StalePullRequestResponse;
-      if (!response.ok) throw new Error(payload.error ?? "Could not run this automation.");
+      if (!response.ok) {
+        const requestReference = payload.requestId ? ` (request ${payload.requestId})` : "";
+        throw new Error(`${payload.error ?? "Could not run this automation."}${requestReference}`);
+      }
       setResult(payload);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not run this automation.");

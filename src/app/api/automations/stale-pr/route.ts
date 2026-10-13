@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { getServerSession } from "next-auth";
 import { NextRequest } from "next/server";
 import { authOptions, githubOAuthConfigured } from "../../../../auth.ts";
@@ -29,22 +30,47 @@ export async function POST(request: NextRequest): Promise<Response> {
     return Response.json({ error: "Choose an inactivity threshold from 1 to 365 days." }, { status: 400 });
   }
 
+  const requestId = randomUUID();
+  let stage = "resolve-repository";
+  let repository: string | null = null;
   try {
     const repositoryPath = process.cwd();
     const localRepository = getGitHubOriginRepository(repositoryPath);
     if (!localRepository) throw new Error("Could not identify the current checkout's GitHub origin.");
-    const repository = await getSelectedRepositoryForRequest(request);
-    if (repository.toLowerCase() !== localRepository.toLowerCase()) {
-      throw new Error(`Selected repository ${repository} does not match the current checkout origin ${localRepository}.`);
+    const selectedRepository = await getSelectedRepositoryForRequest(request);
+    repository = selectedRepository;
+    if (selectedRepository.toLowerCase() !== localRepository.toLowerCase()) {
+      throw new Error(`Selected repository ${selectedRepository} does not match the current checkout origin ${localRepository}.`);
     }
+    stage = "create-installation-token";
     const token = await getInstallationTokenForRequest(request);
-    const pullRequests = await collectOpenPullRequests(repository, token);
+    stage = "fetch-open-pull-requests";
+    console.info("[redzone:stale-pr] Run started", {
+      requestId,
+      repository,
+      staleAfterDays: parsed.data.staleAfterDays,
+      includeDrafts: parsed.data.includeDrafts,
+    });
+    const pullRequests = await collectOpenPullRequests(selectedRepository, token, requestId);
+    stage = "evaluate-staleness-rule";
     const result = buildStalePullRequestWorkflowResult(pullRequests, parsed.data);
-    const response = Response.json({ repository, config: parsed.data, ...result });
+    console.info("[redzone:stale-pr] Run completed", {
+      requestId,
+      repository,
+      scannedPullRequestCount: result.scannedPullRequestCount,
+      candidateCount: result.candidates.length,
+    });
+    const response = Response.json({ repository, requestId, config: parsed.data, ...result });
     response.headers.set("Cache-Control", "private, no-store");
     return response;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not scan stale pull requests.";
-    return Response.json({ error: message }, { status: 400 });
+    console.error("[redzone:stale-pr] Run failed", {
+      requestId,
+      repository,
+      stage,
+      error: error instanceof Error ? { name: error.name, message: error.message } : "Unknown automation error",
+    });
+    return Response.json({ error: message, requestId }, { status: 400 });
   }
 }
