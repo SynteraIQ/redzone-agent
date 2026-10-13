@@ -59,6 +59,7 @@ export async function prepareAnalysisContext(
   reviewEvidence: ReviewEvidence[],
   repositoryPath: string,
   onProgress?: (event: AnalysisProgressEvent) => void | Promise<void>,
+  githubRepository?: string,
 ): Promise<AnalysisPlanningContext> {
   const reportProgress = async (event: AnalysisProgressEvent) => await onProgress?.(event);
   const candidateChange = {
@@ -83,7 +84,7 @@ export async function prepareAnalysisContext(
     transitiveDependents: impactGraph.transitiveDependents.slice(0, 50),
   };
   const rollbackEvidence = snapshot.history.filter(hasRollbackSignal);
-  const evidenceReferences = createEvidenceReferences(snapshot, impactGraph, rollbackEvidence, reviewEvidence);
+  const evidenceReferences = createEvidenceReferences(snapshot, impactGraph, rollbackEvidence, reviewEvidence, githubRepository);
   const candidatePrompt = JSON.stringify({
     candidateChange,
     impactGraph: impactEvidence,
@@ -165,8 +166,9 @@ export async function createAnalysisPlan(
   reviewEvidence: ReviewEvidence[],
   sourceCoverage: ReviewCoverage | undefined,
   repositoryPath: string,
+  githubRepository?: string,
 ): Promise<AnalysisPlanDecision> {
-  const context = await prepareAnalysisContext(snapshot, reviewEvidence, repositoryPath);
+  const context = await prepareAnalysisContext(snapshot, reviewEvidence, repositoryPath, undefined, githubRepository);
   const selection = await selectAnalysisAgents(
     context,
     `There are ${context.rollbackEvidence.length} explicit rollback/mitigation history signals and ${reviewEvidence.length} prior review records. Source coverage: ${JSON.stringify(sourceCoverage ?? null)}.`,

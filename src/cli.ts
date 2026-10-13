@@ -23,7 +23,7 @@ if (unknownOptions.length > 0 || baseRefs.length > 1) {
     if (snapshot.changedFiles.length === 0) {
       console.log(`No changed files found between ${baseRef} and HEAD.`);
     } else {
-      const reviewCollection = collectReviewEvidence(snapshot);
+      const reviewCollection = await collectReviewEvidence(snapshot);
       const analysis = await analyzeSnapshot(
         snapshot,
         reviewCollection.evidence,

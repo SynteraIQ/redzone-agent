@@ -5,6 +5,7 @@ import type { EvidenceReference } from "./analysis-evidence.ts";
 
 type AnalysisReportInput = {
   repositoryPath: string;
+  repository?: string;
   snapshot: RepositorySnapshot;
   analysis: RedZoneAnalysis;
   reviewEvidence: ReviewEvidence[];
@@ -18,17 +19,21 @@ function compactText(value: string, maxCharacters: number): string {
     : text;
 }
 
-function formatEvidenceReference(reference: EvidenceReference): string {
-  const revision = reference.provenance.revision
+function formatEvidenceReference(
+  reference: Omit<EvidenceReference, "provenance"> & { provenance?: EvidenceReference["provenance"] },
+): string {
+  const revision = reference.provenance?.revision
     ? ` · ${reference.provenance.revision.slice(0, 12)}`
     : "";
-  const baseRef = reference.provenance.baseRef ? ` · base ${reference.provenance.baseRef}` : "";
-  const baseRevision = reference.provenance.baseRevision
+  const baseRef = reference.provenance?.baseRef ? ` · base ${reference.provenance.baseRef}` : "";
+  const baseRevision = reference.provenance?.baseRevision
     ? ` (${reference.provenance.baseRevision.slice(0, 12)})`
     : "";
-  const date = reference.provenance.date ? ` · ${reference.provenance.date}` : "";
-  const workingTree = reference.provenance.includesWorkingTree ? " · includes working tree" : "";
-  const provenance = ` (${reference.provenance.source}${revision}${baseRef}${baseRevision}${date}${workingTree})`;
+  const date = reference.provenance?.date ? ` · ${reference.provenance.date}` : "";
+  const workingTree = reference.provenance?.includesWorkingTree ? " · includes working tree" : "";
+  const provenance = reference.provenance
+    ? ` (${reference.provenance.source}${revision}${baseRef}${baseRevision}${date}${workingTree})`
+    : "";
   const labelBudget = Math.max(0, 260 - provenance.length);
   const label = `${labelBudget > 0 ? compactText(reference.label, labelBudget) : ""}${provenance}`
     .replace(/([\\`*_{}\[\]()#+\-.!|>])/g, "\\$1");
@@ -65,9 +70,48 @@ function reviewSourceLabel(source: ReviewEvidence["source"]): string {
   }
 }
 
+function suggestedReviewers(analysis: RedZoneAnalysis, reviewEvidence: ReviewEvidence[]): string[] {
+  const reviewContext = analysis.agentTrace?.find((agent) => agent.name.toLowerCase().includes("review context"));
+  const relevantIds = new Set(
+    (reviewContext?.evidence ?? [])
+      .filter((reference) => reference.kind === "review")
+      .map((reference) => reference.id.slice("review:".length)),
+  );
+  const candidates = new Map<string, { pullRequests: Set<number>; latestReview: string; evidence: ReviewEvidence[] }>();
+
+  for (const item of reviewEvidence) {
+    if (!relevantIds.has(item.id) || !/^[A-Za-z0-9-]{1,39}$/.test(item.author) || item.author === "unknown") continue;
+    const candidate = candidates.get(item.author) ?? {
+      pullRequests: new Set<number>(),
+      latestReview: "",
+      evidence: [],
+    };
+    candidate.pullRequests.add(item.pullRequestNumber);
+    candidate.evidence.push(item);
+    if (item.createdAt > candidate.latestReview) candidate.latestReview = item.createdAt;
+    candidates.set(item.author, candidate);
+  }
+
+  return [...candidates.entries()].flatMap(([author, candidate]) => {
+    const profileUrl = `https://github.com/${author}`;
+    const prCount = candidate.pullRequests.size;
+    const latestDate = candidate.latestReview.slice(0, 10);
+    const supportingEvidence = candidate.evidence.map((item) => formatEvidenceReference({
+      id: `review:${item.id}`,
+      kind: "review",
+      label: `PR #${item.pullRequestNumber} ${reviewSourceLabel(item.source)}${item.decision ? ` · ${item.decision}` : ""}${item.path ? ` · ${item.path}` : ""}`,
+      url: item.commentUrl,
+    }));
+    return [
+      `- [@${author}](${profileUrl}) · cited in ${candidate.evidence.length} relevant review record${candidate.evidence.length === 1 ? "" : "s"} across ${prCount} PR${prCount === 1 ? "" : "s"} · latest ${latestDate}`,
+      `  - Basis: ${supportingEvidence.join("; ")}`,
+    ];
+  });
+}
+
 function coverageLines(coverage: ReviewCoverage): string[] {
   if (!coverage.githubConfigured) {
-    return ["GitHub PR history was not searched (`GH_REPO` is not configured)."];
+    return ["GitHub PR history was not searched (no repository was selected)."];
   }
 
   const lines = [
@@ -94,14 +138,31 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
     ? "Insufficient evidence"
     : `${analysis.riskLevel[0].toUpperCase()}${analysis.riskLevel.slice(1)} historical signal`;
   const citedCommits = new Set(analysis.commitEvidenceHashes);
+  const citedEvidenceById = new Map(analysis.synthesisEvidence.map((reference) => [reference.id, reference]));
+  const citedReviewIds = new Set([
+    ...analysis.reviewEvidenceIds,
+    ...(analysis.agentTrace ?? [])
+      .filter((agent) => agent.name.toLowerCase().includes("review context"))
+      .flatMap((agent) => agent.evidence)
+      .filter((reference) => reference.kind === "review")
+      .map((reference) => reference.id.slice("review:".length)),
+  ]);
   const workingTreeLine = snapshot.workingTreeFiles.length > 0
     ? `**Uncommitted tracked files:** ${snapshot.workingTreeFiles.slice(0, 5).map((path) => `\`${path}\``).join(", ")}` +
       (snapshot.workingTreeFiles.length > 5 ? `, and ${snapshot.workingTreeFiles.length - 5} more` : "")
     : "**Uncommitted tracked files:** none";
   const commitLines = snapshot.history
     .filter((commit) => citedCommits.has(commit.hash))
-    .map((commit) => `- \`${commit.hash.slice(0, 12)}\` · ${commit.date} · ${compactText(commit.subject, 140)}`);
-  const reviewLines = reviewEvidence.slice(0, 3).map((item) => {
+    .map((commit) => {
+      const reference = citedEvidenceById.get(`commit:${commit.hash}`);
+      const hashLabel = `\`${commit.hash.slice(0, 12)}\``;
+      const linkedHash = reference?.url
+        ? `[${hashLabel}](${reference.url})`
+        : hashLabel;
+      return `- ${linkedHash} · ${commit.date} · ${compactText(commit.subject, 140)}`;
+    });
+  const citedReviewEvidence = reviewEvidence.filter((item) => citedReviewIds.has(item.id));
+  const reviewLines = citedReviewEvidence.slice(0, 5).map((item) => {
     const decision = item.decision ? ` · **${item.decision}**` : "";
     const path = item.path ? ` · \`${item.path}\`` : "";
     const excerpt = evidenceExcerpt(item.body);
@@ -120,12 +181,24 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
           : "none found"}${analysis.impactGraph.transitiveDependents.length > 8 ? `, and ${analysis.impactGraph.transitiveDependents.length - 8} more` : ""}`,
         `- ${analysis.impactGraph.note}`,
       ];
+  const maintainerReviewReasons = [
+    ...(analysis.riskLevel === "insufficient-evidence"
+      ? ["No relevant historical evidence supported a risk assessment."]
+      : []),
+    ...(sourceCoverage.mayHaveMorePullRequests
+      ? ["The GitHub search reached its configured limit; older relevant PRs may be missing."]
+      : []),
+    ...(!sourceCoverage.githubConfigured
+      ? ["GitHub review history was not searched for this run."]
+      : []),
+  ];
+  const reviewerSuggestions = suggestedReviewers(analysis, reviewEvidence);
 
   return [
     "# Red Zone result",
     "",
     `**Risk:** ${riskLabel}  `,
-    `**Repository:** \`${input.repositoryPath}\` · **Base:** \`${snapshot.baseRef}\``,
+    `**Repository:** \`${input.repository ?? sourceCoverage.repository ?? input.repositoryPath}\` · **Base:** \`${snapshot.baseRef}\``,
     workingTreeLine,
     "Untracked files are not included in this analysis.",
     "",
@@ -149,11 +222,21 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
       ? [`Evidence: ${analysis.synthesisEvidence.map(formatEvidenceReference).join("; ")}`]
       : ["Evidence: no historical sources were cited."]),
     "",
+    "## Maintainer review",
+    ...(maintainerReviewReasons.length > 0
+      ? ["**Recommended** — validate the change with a maintainer before relying on this assessment.",
+        ...maintainerReviewReasons.map((reason) => `- ${compactText(reason, 220)}`)]
+      : ["Historical evidence was available for this assessment. Confirm that the cited sources still apply to the current behavior."]),
+    ...(reviewerSuggestions.length > 0
+      ? ["", "**Potential maintainers to consult** (based on relevant prior review history):", ...reviewerSuggestions,
+        "Current team role and availability are not verified; treat these as reviewer suggestions, not confirmed maintainers."]
+      : []),
+    "",
     "## Evidence",
     ...commitLines.slice(0, 5),
     ...reviewLines,
     ...(commitLines.length > 5 ? [`- ${commitLines.length - 5} more cited commits omitted.`] : []),
-    ...(reviewEvidence.length > 3 ? [`- ${reviewEvidence.length - 3} more cited reviews omitted.`] : []),
+    ...(citedReviewEvidence.length > 5 ? [`- ${citedReviewEvidence.length - 5} more cited reviews omitted.`] : []),
     ...(commitLines.length === 0 && reviewLines.length === 0 ? ["No historical evidence was cited."] : []),
     "",
     "## Coverage",

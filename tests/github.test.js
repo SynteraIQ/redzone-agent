@@ -4,16 +4,12 @@ import { syncBuiltinESMExports } from "node:module";
 import test from "node:test";
 import { collectReviewEvidence } from "../src/github.ts";
 
-test("retrieves formal decisions and later comment pages for overlapping PRs", (t) => {
-  const originalRepo = process.env.GH_REPO;
+test("retrieves formal decisions and later comment pages for overlapping PRs", async (t) => {
   const originalLimit = process.env.REDZONE_PR_LIMIT;
-  process.env.GH_REPO = "test/repository";
   process.env.REDZONE_PR_LIMIT = "30";
   t.after(() => {
-    for (const [key, value] of [["GH_REPO", originalRepo], ["REDZONE_PR_LIMIT", originalLimit]]) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    if (originalLimit === undefined) delete process.env.REDZONE_PR_LIMIT;
+    else process.env.REDZONE_PR_LIMIT = originalLimit;
     t.mock.restoreAll();
     syncBuiltinESMExports();
   });
@@ -66,7 +62,11 @@ test("retrieves formal decisions and later comment pages for overlapping PRs", (
     ]);
   });
   syncBuiltinESMExports();
-  const collection = collectReviewEvidence({ changedFiles: ["target"], headSha: "current" });
+  const collection = await collectReviewEvidence(
+    { changedFiles: ["target"], headSha: "current" },
+    undefined,
+    "test/repository",
+  );
   assert.deepEqual(collection.evidence.map(({ id }) => id), [
     "formal-5", "formal-6", "formal-7", "review-101", "conversation-102", "conversation-103",
   ]);

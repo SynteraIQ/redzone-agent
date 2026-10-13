@@ -16,8 +16,7 @@ export type AnalysisEvidenceReferences = {
   allEvidenceReferences: EvidenceReference[];
 };
 
-function githubFileUrl(snapshot: RepositorySnapshot, filePath: string): string | undefined {
-  const repository = process.env.GH_REPO?.trim();
+function githubFileUrl(repository: string | undefined, snapshot: RepositorySnapshot, filePath: string): string | undefined {
   if (!repository || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) return undefined;
   const encodedPath = filePath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
   return `https://github.com/${repository}/blob/${snapshot.headSha}/${encodedPath}`;
@@ -33,52 +32,28 @@ export function createEvidenceReferences(
   impactGraph: TypeScriptImpact,
   rollbackEvidence: CommitEvidence[],
   reviewEvidence: ReviewEvidence[],
+  repository?: string,
 ): AnalysisEvidenceReferences {
   const candidateEvidence: EvidenceReference[] = [
     ...snapshot.changedFiles.slice(0, 100).map((filePath) => ({
       id: `change:${filePath}`,
       kind: "change" as const,
       label: `Changed file: ${filePath}`,
-      url: githubFileUrl(snapshot, filePath),
-      provenance: {
-        source: "git-diff" as const,
-        revision: snapshot.headSha,
-        baseRef: snapshot.baseRef,
-        baseRevision: snapshot.mergeBaseSha,
-        paths: [filePath],
-        includesWorkingTree: snapshot.workingTreeFiles.includes(filePath),
-      },
+      url: githubFileUrl(repository, snapshot, filePath),
     })),
     ...impactGraph.directDependents.slice(0, 50).map((filePath) => ({
       id: `impact:direct:${filePath}`,
       kind: "impact" as const,
       label: `Direct dependent: ${filePath}`,
-      url: githubFileUrl(snapshot, filePath),
-      provenance: {
-        source: "static-analysis" as const,
-        revision: snapshot.headSha,
-        baseRef: snapshot.baseRef,
-        baseRevision: snapshot.mergeBaseSha,
-        paths: [filePath],
-        includesWorkingTree: snapshot.workingTreeFiles.length > 0,
-      },
+      url: githubFileUrl(repository, snapshot, filePath),
     })),
     ...impactGraph.transitiveDependents.slice(0, 50).map((filePath) => ({
       id: `impact:transitive:${filePath}`,
       kind: "impact" as const,
       label: `Transitive dependent: ${filePath}`,
-      url: githubFileUrl(snapshot, filePath),
-      provenance: {
-        source: "static-analysis" as const,
-        revision: snapshot.headSha,
-        baseRef: snapshot.baseRef,
-        baseRevision: snapshot.mergeBaseSha,
-        paths: [filePath],
-        includesWorkingTree: snapshot.workingTreeFiles.length > 0,
-      },
+      url: githubFileUrl(repository, snapshot, filePath),
     })),
   ];
-  const repository = process.env.GH_REPO?.trim();
   const historyEvidenceReferences: EvidenceReference[] = snapshot.history.map((commit) => ({
     id: `commit:${commit.hash}`,
     kind: "commit",

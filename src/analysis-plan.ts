@@ -18,6 +18,11 @@ export const AnalysisPlanRunRequestSchema = z.object({
     .refine((agentIds) => new Set(agentIds).size === agentIds.length),
 });
 
+export const AnalysisRunRequestSchema = z.union([
+  AnalysisPlanRunRequestSchema,
+  z.object({ baseRef: z.string().trim().min(1).max(100) }),
+]);
+
 export type AnalysisPlanPreview = {
   hasChanges: boolean;
   snapshotFingerprint: string;

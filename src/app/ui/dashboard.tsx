@@ -1,11 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { DefaultChatTransport } from "ai";
 import { useChat } from "@ai-sdk/react";
 import ReactMarkdown from "react-markdown";
-import { signIn } from "next-auth/react";
 import { AGENT_CATALOG } from "../../agent-catalog.ts";
 import { SpecialistAgentIdSchema } from "../../analysis-plan.ts";
 import type { AnalysisPlanPreview, SpecialistAgentId } from "../../analysis-plan.ts";
@@ -18,6 +17,19 @@ type DashboardProps = {
   userName: string | null;
   signedIn: boolean;
   authConfigured: boolean;
+  githubAppConfigured: boolean;
+  githubAppConnected: boolean;
+};
+
+const githubAppStatusMessages: Record<string, string> = {
+  connected: "GitHub App connected. Choose a repository from the Repositories menu to use its pull request history.",
+  "sign-in-required": "Sign in with the GitHub App, then connect it to the repository.",
+  "not-configured": "Configure the GitHub App credentials and setup URL before connecting it.",
+  "invalid-state": "The GitHub connection could not be verified. Start the connection again.",
+  "installation-missing": "GitHub did not return an installation. Start the connection again.",
+  "installation-not-yours": "The installation is not accessible to the signed-in GitHub account.",
+  "account-mismatch": "The GitHub account authorized for repository access differs from the signed-in account.",
+  "verification-failed": "RedZone could not verify the installation. Check the GitHub App setup and try again.",
 };
 
 function getProgressEvents(message: AnalysisUIMessage): AnalysisProgressEvent[] {
@@ -30,25 +42,47 @@ function getProgressEvents(message: AnalysisUIMessage): AnalysisProgressEvent[] 
   return [...latestByStage.values()];
 }
 
-export function Dashboard({ repository, initialBaseRef, userName, signedIn, authConfigured }: DashboardProps) {
+export function Dashboard({
+  repository,
+  initialBaseRef,
+  userName,
+  signedIn,
+  authConfigured,
+  githubAppConfigured,
+  githubAppConnected,
+}: DashboardProps) {
   const [baseRef, setBaseRef] = useState(initialBaseRef);
   const [plan, setPlan] = useState<AnalysisPlanPreview | null>(null);
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [githubAppNotice, setGitHubAppNotice] = useState<string | null>(null);
   const transport = useMemo(() => new DefaultChatTransport({ api: "/api/analyze" }), []);
   const { messages, sendMessage, status, error } = useChat<AnalysisUIMessage>({ transport });
   const busy = status === "submitted" || status === "streaming";
+  const repositorySelected = repository !== "Select a repository";
   const latestAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const statusMessage = githubAppStatusMessages[params.get("githubApp") ?? ""];
+    if (!statusMessage) return;
+    setGitHubAppNotice(statusMessage);
+    params.delete("githubApp");
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  }, []);
 
   async function runAnalysis(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!plan?.hasChanges) return;
+    if (!baseRef.trim()) return;
     await sendMessage({ text: `Analyze the current change against ${baseRef.trim()}` }, {
-      body: {
-        baseRef: plan.baseRef,
-        snapshotFingerprint: plan.snapshotFingerprint,
-        approvedAgentIds: plan.selectedAgentIds,
-      },
+      body: plan?.hasChanges
+        ? {
+            baseRef: plan.baseRef,
+            snapshotFingerprint: plan.snapshotFingerprint,
+            approvedAgentIds: plan.selectedAgentIds,
+          }
+        : { baseRef: baseRef.trim() },
     });
   }
 
@@ -86,7 +120,15 @@ export function Dashboard({ repository, initialBaseRef, userName, signedIn, auth
 
   return (
     <main className="app-shell">
-      <Sidebar repository={repository} userName={userName} signedIn={signedIn} authConfigured={authConfigured} activePage="analysis" />
+      <Sidebar
+        repository={repository}
+        userName={userName}
+        signedIn={signedIn}
+        authConfigured={authConfigured}
+        githubAppConfigured={githubAppConfigured}
+        githubAppConnected={githubAppConnected}
+        activePage="analysis"
+      />
 
       <section className="main-panel" id="analysis">
         <header className="topbar">
@@ -95,6 +137,7 @@ export function Dashboard({ repository, initialBaseRef, userName, signedIn, auth
         </header>
 
         <div className="content">
+          {githubAppNotice && <div className="github-app-notice" role="status">{githubAppNotice}</div>}
           <div className="page-intro">
             <div>
               <div className="eyebrow"><span className="eyebrow-line" /> HISTORICAL CODE RISK</div>
@@ -105,19 +148,20 @@ export function Dashboard({ repository, initialBaseRef, userName, signedIn, auth
           </div>
 
           <form className="analysis-card" onSubmit={runAnalysis}>
-            <div className="card-topline"><div><span className="card-icon">⌘</span><strong>Analyze current change</strong></div><span className="local-badge"><i /> {authConfigured && !signedIn ? "SIGN IN REQUIRED" : "READY TO RUN"}</span></div>
-            <p>Plan the review first. Red Zone checks the current diff, dependency impact, Git history, and prior GitHub reviews before you approve which agents to run.</p>
+            <div className="card-topline"><div><span className="card-icon">⌘</span><strong>Analyze current change</strong></div><span className="local-badge"><i /> {!repositorySelected ? "SELECT REPOSITORY" : authConfigured && !signedIn ? "SIGN IN REQUIRED" : "READY TO RUN"}</span></div>
+            <p>Run the analysis directly, or plan first to inspect the evidence and choose which specialist checks to run. Direct runs let the planner select eligible checks automatically.</p>
             <div className="analysis-controls">
-              <label className="branch-field"><span>BASE REF</span><div><span className="branch-glyph">⑂</span><input aria-label="Base reference" value={baseRef} onChange={(event) => { setBaseRef(event.target.value); setPlan(null); setPlanError(null); }} placeholder="main, HEAD^, or commit SHA" /></div></label>
-              <button className="plan-button" type="button" onClick={createPlan} disabled={busy || planning || (authConfigured && !signedIn) || !baseRef.trim()}>
+              <label className="branch-field"><span>BASE BRANCH</span><div><span className="branch-glyph">⑂</span><input aria-label="Base branch" value={baseRef} onChange={(event) => { setBaseRef(event.target.value); setPlan(null); setPlanError(null); }} placeholder="main" /></div></label>
+              <button className="plan-button" type="button" onClick={createPlan} disabled={busy || planning || (authConfigured && !signedIn) || !repositorySelected || !baseRef.trim()}>
                 {planning ? <><span className="spinner" /> Planning</> : <>Plan review <span>↗</span></>}
               </button>
-              <button className="run-button" type="submit" disabled={busy || planning || (authConfigured && !signedIn) || !plan?.hasChanges || plan.selectedAgentIds.length === 0}>
-                {busy ? <><span className="spinner" /> Running</> : <>Run approved plan <span>↗</span></>}
+              <button className="run-button" type="submit" disabled={busy || planning || (authConfigured && !signedIn) || !repositorySelected || !baseRef.trim() || (plan !== null && !plan.hasChanges) || (plan?.hasChanges === true && plan.selectedAgentIds.length === 0)}>
+                {busy ? <><span className="spinner" /> Running</> : plan?.hasChanges ? <>Run approved plan <span>↗</span></> : <>Run analysis <span>↗</span></>}
               </button>
             </div>
-            {authConfigured && !signedIn && <div className="auth-note">Sign in with Google to run an analysis. <button type="button" onClick={() => signIn("google")}>Continue with Google <span>→</span></button></div>}
-            {!authConfigured && <div className="helper-note">Local developer mode · Configure Google OAuth before production deployment.</div>}
+            {!repositorySelected && <div className="auth-note">Choose a GitHub repository before planning the review. <a href="/repositories">Open Repositories <span>→</span></a></div>}
+            {authConfigured && !signedIn && <div className="auth-note">Sign in with GitHub to run an analysis. <a href="/login">Continue with GitHub <span>→</span></a></div>}
+            {!authConfigured && <div className="helper-note">Local developer mode · Configure GitHub App sign-in before production deployment.</div>}
             {planError && <div className="plan-error" role="alert">{planError}</div>}
           </form>
 
