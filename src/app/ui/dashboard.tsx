@@ -108,7 +108,7 @@ export function Dashboard({ repository, initialBaseRef, userName, signedIn, auth
             <div className="card-topline"><div><span className="card-icon">⌘</span><strong>Analyze current change</strong></div><span className="local-badge"><i /> {authConfigured && !signedIn ? "SIGN IN REQUIRED" : "READY TO RUN"}</span></div>
             <p>Plan the review first. Red Zone checks the current diff, dependency impact, Git history, and prior GitHub reviews before you approve which agents to run.</p>
             <div className="analysis-controls">
-              <label className="branch-field"><span>BASE BRANCH</span><div><span className="branch-glyph">⑂</span><input aria-label="Base branch" value={baseRef} onChange={(event) => { setBaseRef(event.target.value); setPlan(null); setPlanError(null); }} placeholder="main" /></div></label>
+              <label className="branch-field"><span>BASE REF</span><div><span className="branch-glyph">⑂</span><input aria-label="Base reference" value={baseRef} onChange={(event) => { setBaseRef(event.target.value); setPlan(null); setPlanError(null); }} placeholder="main, HEAD^, or commit SHA" /></div></label>
               <button className="plan-button" type="button" onClick={createPlan} disabled={busy || planning || (authConfigured && !signedIn) || !baseRef.trim()}>
                 {planning ? <><span className="spinner" /> Planning</> : <>Plan review <span>↗</span></>}
               </button>

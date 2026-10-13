@@ -11,6 +11,8 @@ export type RepositorySnapshot = {
   baseRef: string;
   headRef: string;
   headSha: string;
+  baseSha: string;
+  mergeBaseSha: string;
   changedFiles: string[];
   workingTreeFiles: string[];
   diff: string;
@@ -102,6 +104,8 @@ export function collectRepositorySnapshot(
     baseRef,
     headRef,
     headSha,
+    baseSha,
+    mergeBaseSha: mergeBase,
     changedFiles,
     workingTreeFiles,
     diff,
