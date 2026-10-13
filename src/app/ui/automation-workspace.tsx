@@ -16,6 +16,19 @@ type StalePullRequestResponse = StalePullRequestWorkflowResult & {
   error?: string;
 };
 
+type StalePullRequestRunResponse = {
+  requestId?: string;
+  runRef?: string;
+  status?: "running" | "completed" | "failed" | "cancelled";
+  repository?: string;
+  result?: StalePullRequestWorkflowResult;
+  error?: string;
+};
+
+function waitForNextPoll(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 1200));
+}
+
 function updatedDate(value: string): string {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleDateString() : "Unknown";
@@ -44,13 +57,30 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ staleAfterDays: threshold, includeDrafts }),
       });
-      const payload = await response.json().catch(() => null) as StalePullRequestResponse | null;
+      const payload = await response.json().catch(() => null) as StalePullRequestRunResponse | null;
       if (!payload) throw new Error("Could not run this automation.");
       if (!response.ok) {
         const requestReference = payload.requestId ? ` (request ${payload.requestId})` : "";
         throw new Error(`${payload.error ?? "Could not run this automation."}${requestReference}`);
       }
-      setResult(payload);
+      if (!payload.runRef) throw new Error("The automation started without a run reference.");
+      while (true) {
+        await waitForNextPoll();
+        const statusResponse = await fetch(
+          `/api/automations/stale-pr?runRef=${encodeURIComponent(payload.runRef)}`,
+          { cache: "no-store" },
+        );
+        const status = await statusResponse.json().catch(() => null) as StalePullRequestRunResponse | null;
+        if (!status) throw new Error("Could not read the automation run status.");
+        if (!statusResponse.ok || status.status === "failed" || status.status === "cancelled") {
+          const requestReference = status.requestId ? ` (request ${status.requestId})` : "";
+          throw new Error(`${status.error ?? "The stale pull request workflow did not complete."}${requestReference}`);
+        }
+        if (status.status === "completed" && status.result && status.repository) {
+          setResult({ ...status.result, repository: status.repository, requestId: status.requestId });
+          break;
+        }
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not run this automation.");
     } finally {

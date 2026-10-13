@@ -235,6 +235,20 @@ async function createInstallationToken(installationId: number, repository?: stri
   return result.token;
 }
 
+export async function createInstallationTokenForWorkflow(
+  installationId: number,
+  repository: string,
+): Promise<string> {
+  if (!Number.isSafeInteger(installationId) || installationId < 1) {
+    throw new Error("The GitHub App installation is invalid.");
+  }
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("The selected GitHub repository is invalid.");
+  }
+  if (!isGitHubAppConfigured()) throw new Error("Configure the GitHub App before using repository access.");
+  return createInstallationToken(installationId, repository);
+}
+
 async function installationContext(request: NextRequest): Promise<{ installationId: number; subject: string }> {
   const sessionToken = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
   if (!sessionToken?.sub) throw new RepositorySelectionError("Sign in with GitHub before connecting a repository.");
@@ -268,6 +282,15 @@ export async function getInstalledRepositoriesForRequest(request: NextRequest): 
 }
 
 export async function getSelectedRepositoryForRequest(request: NextRequest): Promise<string> {
+  const context = await getSelectedRepositoryContextForRequest(request);
+  return context.repository;
+}
+
+export async function getSelectedRepositoryContextForRequest(request: NextRequest): Promise<{
+  repository: string;
+  installationId: number;
+  subject: string;
+}> {
   const context = await installationContext(request);
   const repository = readSelectedRepositoryCookie(
     request.cookies.get(GITHUB_REPOSITORY_COOKIE)?.value,
@@ -275,7 +298,7 @@ export async function getSelectedRepositoryForRequest(request: NextRequest): Pro
     context.installationId,
   );
   if (!repository) throw new RepositorySelectionError("Choose a repository from the Repositories menu before analyzing.");
-  return repository;
+  return { repository, ...context };
 }
 
 export async function getInstallationTokenForRequest(request: NextRequest): Promise<string> {
