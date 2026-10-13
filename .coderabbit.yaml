@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+reviews:
+  profile: chill
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/.next/**"
+    - "!**/dist/**"
+    - "!package-lock.json"
+  path_instructions:
+    - path: "src/analysis-evidence.ts"
+      instructions: "Check that evidence schema changes stay backward compatible, including provenance fields."
+    - path: "src/analysis-plan.ts"
+      instructions: "Review base-reference validation carefully for injection and edge cases (`~`, `^`, leading dashes)."
+    - path: "src/history.ts"
+      instructions: "Snapshot fingerprints must stay deterministic and include all resolved SHAs (base and merge-base)."
+    - path: "src/report.ts"
+      instructions: "Verify the 260-character label budget is respected and truncation is safe."
+    - path: "tests/**"
+      instructions: "Ensure tests cover edge cases and don't depend on network access."
+    - path: "docs/**"
+      instructions: "Check docs for accuracy against the current implementation."
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+chat:
+  auto_reply: true

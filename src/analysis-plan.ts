@@ -45,6 +45,8 @@ export type AnalysisPlanPreview = {
 export function createSnapshotFingerprint(snapshot: RepositorySnapshot): string {
   return createHash("sha256").update(JSON.stringify({
     baseRef: snapshot.baseRef,
+    baseSha: snapshot.baseSha,
+    mergeBaseSha: snapshot.mergeBaseSha,
     headSha: snapshot.headSha,
     changedFiles: snapshot.changedFiles,
     workingTreeFiles: snapshot.workingTreeFiles,
@@ -55,5 +57,5 @@ export function createSnapshotFingerprint(snapshot: RepositorySnapshot): string 
 
 export function isValidBaseRef(baseRef: string): boolean {
   return baseRef.length > 0 && baseRef.length <= 100 && !baseRef.startsWith("-") &&
-    /^[A-Za-z0-9_./-]+$/.test(baseRef);
+    /^[A-Za-z0-9_./~^-]+$/.test(baseRef);
 }
