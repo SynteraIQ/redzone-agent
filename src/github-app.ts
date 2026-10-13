@@ -7,6 +7,8 @@ export const GITHUB_INSTALL_STATE_COOKIE = "redzone_github_install_state";
 export const GITHUB_INSTALL_PENDING_COOKIE = "redzone_github_install_pending";
 export const GITHUB_REPOSITORY_COOKIE = "redzone_github_repository";
 
+export class RepositorySelectionError extends Error {}
+
 type InstallationCookie = {
   installationId: number;
   subject: string;
@@ -235,12 +237,12 @@ async function createInstallationToken(installationId: number, repository?: stri
 
 async function installationContext(request: NextRequest): Promise<{ installationId: number; subject: string }> {
   const sessionToken = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
-  if (!sessionToken?.sub) throw new Error("Sign in with GitHub before connecting a repository.");
+  if (!sessionToken?.sub) throw new RepositorySelectionError("Sign in with GitHub before connecting a repository.");
   const installationId = readInstallationCookie(
     request.cookies.get(GITHUB_INSTALLATION_COOKIE)?.value,
     sessionToken.sub,
   );
-  if (!installationId) throw new Error("Connect the RedZone GitHub App before selecting a repository.");
+  if (!installationId) throw new RepositorySelectionError("Connect the RedZone GitHub App before selecting a repository.");
   return { installationId, subject: sessionToken.sub };
 }
 
@@ -272,7 +274,7 @@ export async function getSelectedRepositoryForRequest(request: NextRequest): Pro
     context.subject,
     context.installationId,
   );
-  if (!repository) throw new Error("Choose a repository from the Repositories menu before analyzing.");
+  if (!repository) throw new RepositorySelectionError("Choose a repository from the Repositories menu before analyzing.");
   return repository;
 }
 
@@ -284,6 +286,6 @@ export async function getInstallationTokenForRequest(request: NextRequest): Prom
     context.subject,
     context.installationId,
   );
-  if (!repository) throw new Error("Choose a repository from the Repositories menu before analyzing.");
+  if (!repository) throw new RepositorySelectionError("Choose a repository from the Repositories menu before analyzing.");
   return createInstallationToken(context.installationId, repository);
 }

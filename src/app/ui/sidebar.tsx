@@ -9,7 +9,7 @@ type SidebarProps = {
   authConfigured: boolean;
   githubAppConfigured: boolean;
   githubAppConnected: boolean;
-  activePage: "analysis" | "agents" | "repositories" | "experts";
+  activePage: "analysis" | "agents" | "repositories" | "experts" | "automations";
 };
 
 export function Sidebar({
@@ -36,6 +36,7 @@ export function Sidebar({
         <a className={`nav-item ${activePage === "analysis" ? "active" : "muted"}`} href="/" aria-current={activePage === "analysis" ? "page" : undefined}><span>◈</span> Analysis</a>
         <a className={`nav-item ${activePage === "repositories" ? "active" : "muted"}`} href="/repositories" aria-current={activePage === "repositories" ? "page" : undefined}><span>▤</span> Repositories</a>
         <a className={`nav-item ${activePage === "experts" ? "active" : "muted"}`} href="/experts" aria-current={activePage === "experts" ? "page" : undefined}><span>◎</span> Expert map</a>
+        <a className={`nav-item ${activePage === "automations" ? "active" : "muted"}`} href="/automations" aria-current={activePage === "automations" ? "page" : undefined}><span>↻</span> Automations</a>
         <a className={`nav-item ${activePage === "agents" ? "active" : "muted"}`} href="/agents" aria-current={activePage === "agents" ? "page" : undefined}><span>◇</span> Agents</a>
       </nav>
       <div className="sidebar-bottom">
