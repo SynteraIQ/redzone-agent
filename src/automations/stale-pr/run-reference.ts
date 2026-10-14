@@ -16,6 +16,10 @@ function signature(value: string): Buffer {
   return createHmac("sha256", secret).update(value).digest();
 }
 
+export function createStalePullRequestSubjectKey(subject: string): string {
+  return signature(`stale-pr-history:${subject}`).toString("base64url");
+}
+
 export function createStalePullRequestRunReference(
   runId: string,
   repository: string,

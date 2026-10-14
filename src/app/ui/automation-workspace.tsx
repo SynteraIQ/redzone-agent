@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { StalePullRequestWorkflowResult } from "../../automations/stale-pr/workflow.ts";
+import type {
+  StalePullRequestProgressEvent,
+  StalePullRequestWorkflowResult,
+} from "../../automations/stale-pr/workflow.ts";
 
 type AutomationWorkspaceProps = {
   repository: string;
@@ -13,6 +16,9 @@ type AutomationWorkspaceProps = {
 type StalePullRequestResponse = StalePullRequestWorkflowResult & {
   repository: string;
   requestId?: string;
+  threshold?: number;
+  unit?: "hours" | "days";
+  includeDrafts?: boolean;
   error?: string;
 };
 
@@ -24,6 +30,26 @@ type StalePullRequestRunResponse = {
   result?: StalePullRequestWorkflowResult;
   error?: string;
 };
+
+type StalePullRequestHistoryRun = {
+  runRef: string;
+  requestId: string;
+  repository: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  startedAt: string;
+  threshold: number;
+  unit: "hours" | "days";
+  includeDrafts: boolean;
+};
+
+const stalePullRequestSteps: Array<{
+  id: StalePullRequestProgressEvent["stepId"];
+  label: string;
+}> = [
+  { id: "fetch-open-pull-requests", label: "Fetch open pull requests" },
+  { id: "apply-staleness-rule", label: "Apply inactivity threshold" },
+  { id: "prepare-report", label: "Prepare report" },
+];
 
 const POLLING_TIMEOUT_MS = 2 * 60 * 1000;
 
@@ -42,9 +68,66 @@ function waitForNextPoll(signal: AbortSignal): Promise<void> {
   });
 }
 
+async function streamWorkflowProgress(
+  runRef: string,
+  onProgress: (event: StalePullRequestProgressEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await fetch(
+    `/api/automations/stale-pr?runRef=${encodeURIComponent(runRef)}&events=true`,
+    { cache: "no-store", signal },
+  );
+  if (!response.ok || !response.body) throw new Error("Workflow progress stream unavailable.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const dataLine = frame.split(/\r?\n/).find((line) => line.startsWith("data:"));
+      if (!dataLine) continue;
+      onProgress(JSON.parse(dataLine.slice(5).trim()) as StalePullRequestProgressEvent);
+    }
+    if (done) return;
+  }
+}
+
 function updatedDate(value: string): string {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleDateString() : "Unknown";
+}
+
+function runDate(value: string): string {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : "Unknown";
+}
+
+async function waitForStalePullRequestRun(
+  runRef: string,
+  signal: AbortSignal,
+): Promise<{ requestId?: string; repository: string; result: StalePullRequestWorkflowResult }> {
+  while (!signal.aborted) {
+    await waitForNextPoll(signal);
+    const response = await fetch(
+      `/api/automations/stale-pr?runRef=${encodeURIComponent(runRef)}`,
+      { cache: "no-store", signal },
+    );
+    const payload = await response.json().catch(() => null) as StalePullRequestRunResponse | null;
+    signal.throwIfAborted();
+    if (!payload) throw new Error("Could not read the automation run status.");
+    if (!response.ok || payload.status === "failed" || payload.status === "cancelled") {
+      const requestReference = payload.requestId ? ` (request ${payload.requestId})` : "";
+      throw new Error(`${payload.error ?? "The stale pull request workflow did not complete."}${requestReference}`);
+    }
+    if (payload.status === "completed" && payload.result && payload.repository) {
+      return { requestId: payload.requestId, repository: payload.repository, result: payload.result };
+    }
+  }
+  throw new Error("Stopped waiting for the workflow result.");
 }
 
 export function AutomationWorkspace({ repository, connected, configured }: AutomationWorkspaceProps) {
@@ -52,14 +135,48 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
   const [inactivityUnit, setInactivityUnit] = useState<"hours" | "days">("days");
   const [includeDrafts, setIncludeDrafts] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<Partial<Record<StalePullRequestProgressEvent["stepId"], StalePullRequestProgressEvent>>>({});
   const [result, setResult] = useState<StalePullRequestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<StalePullRequestHistoryRun[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [openingHistoryRunId, setOpeningHistoryRunId] = useState<string | null>(null);
   const activeRun = useRef<AbortController | null>(null);
 
   useEffect(() => () => {
     activeRun.current?.abort();
     activeRun.current = null;
   }, []);
+
+  const refreshHistory = useCallback(async (signal?: AbortSignal) => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const response = await fetch("/api/automations/stale-pr?history=1", {
+        cache: "no-store",
+        ...(signal ? { signal } : {}),
+      });
+      const payload = await response.json().catch(() => null) as { runs?: StalePullRequestHistoryRun[]; error?: string } | null;
+      if (!response.ok || !payload) throw new Error(payload?.error ?? "Could not load run history.");
+      setHistory(payload.runs ?? []);
+    } catch (caught) {
+      if (!signal?.aborted) setHistoryError(caught instanceof Error ? caught.message : "Could not load run history.");
+    } finally {
+      if (!signal?.aborted) setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!configured || !connected || repository === "Select a repository") {
+      setHistory([]);
+      setHistoryLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    void refreshHistory(controller.signal);
+    return () => controller.abort();
+  }, [connected, configured, refreshHistory, repository]);
 
   async function runStalePullRequestWorkflow(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -72,11 +189,13 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
     activeRun.current?.abort();
     const controller = new AbortController();
     activeRun.current = controller;
+    setOpeningHistoryRunId(null);
     let deadlineTimer: number | undefined;
     let timedOut = false;
     setLoading(true);
     setError(null);
     setResult(null);
+    setProgress({});
     try {
       const response = await fetch("/api/automations/stale-pr", {
         method: "POST",
@@ -99,25 +218,24 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
         timedOut = true;
         controller.abort();
       }, POLLING_TIMEOUT_MS);
-      while (!controller.signal.aborted) {
-        await waitForNextPoll(controller.signal);
-        controller.signal.throwIfAborted();
-        const statusResponse = await fetch(
-          `/api/automations/stale-pr?runRef=${encodeURIComponent(payload.runRef)}`,
-          { cache: "no-store", signal: controller.signal },
-        );
-        const status = await statusResponse.json().catch(() => null) as StalePullRequestRunResponse | null;
-        controller.signal.throwIfAborted();
-        if (!status) throw new Error("Could not read the automation run status.");
-        if (!statusResponse.ok || status.status === "failed" || status.status === "cancelled") {
-          const requestReference = status.requestId ? ` (request ${status.requestId})` : "";
-          throw new Error(`${status.error ?? "The stale pull request workflow did not complete."}${requestReference}`);
-        }
-        if (status.status === "completed" && status.result && status.repository) {
-          setResult({ ...status.result, repository: status.repository, requestId: status.requestId });
-          break;
-        }
+      try {
+        await streamWorkflowProgress(payload.runRef, (event) => {
+          setProgress((current) => ({ ...current, [event.stepId]: event }));
+        }, controller.signal);
+      } catch {
+        // Durable status polling below still returns the final report if streaming disconnects.
       }
+      controller.signal.throwIfAborted();
+      const completed = await waitForStalePullRequestRun(payload.runRef, controller.signal);
+      setResult({
+        ...completed.result,
+        repository: completed.repository,
+        requestId: completed.requestId,
+        threshold,
+        unit: inactivityUnit,
+        includeDrafts,
+      });
+      void refreshHistory();
     } catch (caught) {
       if (activeRun.current === controller) {
         if (timedOut) {
@@ -131,6 +249,44 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       if (activeRun.current === controller) {
         activeRun.current = null;
         setLoading(false);
+      }
+    }
+  }
+
+  async function openHistoryRun(run: StalePullRequestHistoryRun) {
+    activeRun.current?.abort();
+    const controller = new AbortController();
+    activeRun.current = controller;
+    let timedOut = false;
+    setOpeningHistoryRunId(run.requestId);
+    setError(null);
+    setInactivityThreshold(String(run.threshold));
+    setInactivityUnit(run.unit);
+    setIncludeDrafts(run.includeDrafts);
+    const deadlineTimer = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, POLLING_TIMEOUT_MS);
+    try {
+      const completed = await waitForStalePullRequestRun(run.runRef, controller.signal);
+      setResult({
+        ...completed.result,
+        repository: completed.repository,
+        requestId: completed.requestId,
+        threshold: run.threshold,
+        unit: run.unit,
+        includeDrafts: run.includeDrafts,
+      });
+    } catch (caught) {
+      if (activeRun.current === controller) {
+        if (timedOut) setError("The workflow is still running after two minutes. Stopped waiting for its result.");
+        else if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Could not open this run.");
+      }
+    } finally {
+      window.clearTimeout(deadlineTimer);
+      if (openingHistoryRunId === run.requestId) setOpeningHistoryRunId(null);
+      if (activeRun.current === controller) {
+        activeRun.current = null;
       }
     }
   }
@@ -155,15 +311,42 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       <form className="automation-config" onSubmit={runStalePullRequestWorkflow}>
         <label className="automation-field"><span>NO UPDATES FOR</span><span className="automation-number"><input type="number" min={1} max={inactivityUnit === "hours" ? 365 * 24 : 365} required value={inactivityThreshold} placeholder="Set amount" onChange={(event) => setInactivityThreshold(event.target.value)} /><select aria-label="Inactivity unit" value={inactivityUnit} onChange={(event) => setInactivityUnit(event.target.value as "hours" | "days")}><option value="hours">hours</option><option value="days">days</option></select></span></label>
         <label className="automation-checkbox"><input type="checkbox" checked={includeDrafts} onChange={(event) => setIncludeDrafts(event.target.checked)} /><span>Include draft pull requests</span></label>
-        <button className="plan-button" type="submit" disabled={loading || inactivityThreshold === ""}>
+        <button className="plan-button" type="submit" disabled={loading || openingHistoryRunId !== null || inactivityThreshold === ""}>
           {loading ? <><span className="spinner" /> Running workflow</> : <>Run report <span>↗</span></>}
         </button>
       </form>
       {error && <div className="error-banner" role="alert">{error}</div>}
-      {loading && <div className="automation-running" role="status"><span className="spinner" /> Fetching open pull requests and applying the staleness rule…</div>}
+      {loading && <section className="automation-progress" aria-label="Stale PR workflow progress">
+        <div className="automation-running" role="status"><span className="spinner" /> Workflow is running</div>
+        <ol className="automation-steps">
+          {stalePullRequestSteps.map((step) => {
+            const update = progress[step.id];
+            const status = update?.status ?? "pending";
+            const icon = status === "completed" ? "✓" : status === "failed" ? "!" : status === "running" ? "…" : "·";
+            return <li key={step.id}><span className={`automation-step-check automation-step-${status}`} aria-label={status}>{icon}</span><div><strong>{step.label}</strong><span>{update?.detail ?? "Waiting for the previous step."}</span></div></li>;
+          })}
+        </ol>
+      </section>}
+      <section className="automation-history" aria-label="Recent stale PR runs">
+        <div className="automation-history-header"><div><span className="section-kicker">LAST 24 HOURS</span><h3>Recent runs</h3></div><button type="button" onClick={() => void refreshHistory()} disabled={historyLoading}>{historyLoading ? "Refreshing…" : "Refresh"}</button></div>
+        {historyError && <div className="error-banner" role="alert">{historyError}</div>}
+        {openingHistoryRunId && <p className="automation-history-empty" role="status">Loading report or waiting for this run to finish…</p>}
+        {historyLoading && history.length === 0 ? <p className="automation-history-empty">Loading recent runs…</p> : history.length === 0 ? <p className="automation-history-empty">No runs recorded in the available history yet.</p> : (
+          <div className="automation-history-list">
+            {history.map((run) => (
+              <article className="automation-history-row" key={run.requestId}>
+                <div className="automation-history-main"><strong>{run.repository}</strong><span>{runDate(run.startedAt)}</span></div>
+                <div className="automation-history-meta"><span>{run.threshold} {run.unit} inactive</span><span>{run.includeDrafts ? "Drafts included" : "Drafts excluded"}</span></div>
+                <span className={`automation-history-status status-${run.status}`}>{run.status}</span>
+                <button type="button" onClick={() => void openHistoryRun(run)} disabled={loading || openingHistoryRunId !== null || run.status === "failed" || run.status === "cancelled"}>{openingHistoryRunId === run.requestId ? "Loading…" : run.status === "completed" ? "View report" : run.status === "failed" || run.status === "cancelled" ? "Unavailable" : "Resume run"}</button>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
       {result && (
         <section className="automation-run" aria-label="Stale PR workflow result">
-          <div className="automation-run-header"><div><span className="section-kicker">LATEST RUN · {result.repository}</span><h3>{result.candidates.length} stale {result.candidates.length === 1 ? "pull request" : "pull requests"}</h3></div><span>{result.scannedPullRequestCount} scanned</span></div>
+          <div className="automation-run-header"><div><span className="section-kicker">RUN REPORT · {result.repository}</span><h3>{result.candidates.length} stale {result.candidates.length === 1 ? "pull request" : "pull requests"}</h3></div><span>{result.scannedPullRequestCount} scanned</span></div>
           <ol className="automation-steps">
             {result.steps.map((step) => <li key={step.id}><span className="automation-step-check">✓</span><div><strong>{step.id.replaceAll("-", " ")}</strong><span>{step.detail}</span></div></li>)}
           </ol>
@@ -172,7 +355,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
               {result.candidates.map((candidate) => (
                 <article className="stale-pr-card" key={candidate.number}>
                   <div><a href={`https://github.com/${result.repository}/pull/${candidate.number}`} target="_blank" rel="noreferrer">#{candidate.number} {candidate.title}</a><span>by @{candidate.author}{candidate.draft ? " · draft" : ""}</span></div>
-                  <div className="stale-pr-age"><strong>{inactivityUnit === "hours" || candidate.hoursSinceUpdate < 24 ? candidate.hoursSinceUpdate : candidate.daysSinceUpdate}</strong><span>{inactivityUnit === "hours" || candidate.hoursSinceUpdate < 24 ? "hours since update" : "days since update"}</span><small>Updated {updatedDate(candidate.updatedAt)}</small></div>
+                  <div className="stale-pr-age"><strong>{(result.unit ?? inactivityUnit) === "hours" || candidate.hoursSinceUpdate < 24 ? candidate.hoursSinceUpdate : candidate.daysSinceUpdate}</strong><span>{(result.unit ?? inactivityUnit) === "hours" || candidate.hoursSinceUpdate < 24 ? "hours since update" : "days since update"}</span><small>Updated {updatedDate(candidate.updatedAt)}</small></div>
                 </article>
               ))}
             </div>
