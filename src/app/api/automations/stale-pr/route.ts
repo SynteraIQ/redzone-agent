@@ -66,11 +66,14 @@ async function listStalePullRequestRuns(
   return matchingRuns.slice(0, 20);
 }
 
-async function requireSignedInUser(): Promise<{ id: string } | null> {
+async function requireSignedInUser(): Promise<{ id: string; actor: string } | null> {
   const session = await getServerSession(authOptions);
   if (githubOAuthConfigured && !session?.user?.id) return null;
   if (process.env.NODE_ENV === "production" && !githubOAuthConfigured) return null;
-  return session?.user?.id ? { id: session.user.id } : null;
+  return session?.user?.id ? {
+    id: session.user.id,
+    actor: session.user.name?.trim().slice(0, 100) || "GitHub user",
+  } : null;
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -118,6 +121,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       repository,
       installationId: selected.installationId,
       config: parsed.data,
+      actor: user?.actor ?? "Local development user",
+      authentication: user ? "GitHub OAuth" : "Local development mode",
       startedAt: new Date().toISOString(),
       requestId,
     }], {
@@ -129,6 +134,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         threshold: String("staleAfterHours" in parsed.data ? parsed.data.staleAfterHours : parsed.data.staleAfterDays),
         unit: "staleAfterHours" in parsed.data ? "hours" : "days",
         includeDrafts: String(parsed.data.includeDrafts),
+        actor: user?.actor ?? "Local development user",
+        authentication: user ? "GitHub OAuth" : "Local development mode",
       },
     });
     const runRef = createStalePullRequestRunReference(run.runId, repository, selected.subject, requestId);
@@ -190,6 +197,12 @@ export async function GET(request: NextRequest): Promise<Response> {
           threshold,
           unit,
           includeDrafts: attributes.includeDrafts === "true",
+          actor: attributes.actor || "Not recorded",
+          authentication: attributes.authentication === "GitHub OAuth"
+            ? "GitHub OAuth"
+            : attributes.authentication === "Local development mode"
+              ? "Local development mode"
+              : "Not recorded",
         }];
       });
       const response = Response.json({ runs });

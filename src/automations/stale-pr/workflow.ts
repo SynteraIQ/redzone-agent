@@ -14,6 +14,19 @@ export type StalePullRequestCandidate = OpenPullRequest & {
 };
 
 export type StalePullRequestWorkflowResult = {
+  trustRecord?: {
+    actor: string;
+    authentication: "GitHub OAuth" | "Local development mode";
+    repository: string;
+    requestedAt: string;
+    inactivityThreshold: string;
+    includeDrafts: boolean;
+    permissions: string[];
+    writesPerformed: false;
+    decisionRule: string;
+    coverage: string;
+    limitations: string[];
+  };
   steps: Array<{
     id: "fetch-open-pull-requests" | "apply-staleness-rule" | "prepare-report";
     status: "completed";
@@ -33,6 +46,8 @@ export type StalePullRequestWorkflowInput = {
   repository: string;
   installationId: number;
   config: StalePullRequestConfig;
+  actor: string;
+  authentication: "GitHub OAuth" | "Local development mode";
   startedAt: string;
   requestId: string;
 };
@@ -72,6 +87,23 @@ export async function runStalePullRequestWorkflow(
     throw error;
   }
   return {
+    trustRecord: {
+      actor: input.actor,
+      authentication: input.authentication,
+      repository: input.repository,
+      requestedAt: input.startedAt,
+      inactivityThreshold: threshold.label,
+      includeDrafts: input.config.includeDrafts,
+      permissions: ["Pull requests: read", "Issues: read", "Repository metadata: read"],
+      writesPerformed: false,
+      decisionRule: "A pull request qualifies when GitHub's updated_at timestamp is at least the selected threshold old.",
+      coverage: `Evaluated ${scan.scannedPullRequestCount} open pull requests returned by GitHub for the selected repository.`,
+      limitations: [
+        "An old updated_at timestamp is an inactivity signal, not proof that a pull request is abandoned.",
+        "Draft pull requests were " + (input.config.includeDrafts ? "included." : "excluded."),
+        "GitHub pagination is capped at 10,000 open pull requests; scans above that limit stop with an error.",
+      ],
+    },
     steps: [
       {
         id: "fetch-open-pull-requests",
