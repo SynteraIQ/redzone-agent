@@ -286,9 +286,9 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       }
     } finally {
       window.clearTimeout(deadlineTimer);
-      if (openingHistoryRunId === run.requestId) setOpeningHistoryRunId(null);
       if (activeRun.current === controller) {
         activeRun.current = null;
+        setOpeningHistoryRunId(null);
       }
     }
   }
