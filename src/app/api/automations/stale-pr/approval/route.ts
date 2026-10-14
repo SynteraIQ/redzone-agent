@@ -37,6 +37,17 @@ type StalePullRequestApprovalRunMetadata = {
   attributes: Record<string, string>;
 };
 
+function workflowFailureDetail(value: unknown): { name?: string; message: string } | undefined {
+  if (value instanceof Error) return { name: value.name, message: value.message };
+  if (typeof value === "string") return { message: value };
+  if (!value || typeof value !== "object") return undefined;
+
+  const record = value as Record<string, unknown>;
+  const name = typeof record.name === "string" ? record.name : undefined;
+  const message = typeof record.message === "string" ? record.message : undefined;
+  return message ? { ...(name ? { name } : {}), message } : undefined;
+}
+
 async function requireSignedInUser(): Promise<{ id: string; actor: string } | null> {
   const session = await getServerSession(authOptions);
   if (githubOAuthConfigured && !session?.user?.id) return null;
@@ -104,6 +115,23 @@ async function approvalStatus(
   if (!(await run.exists)) return Response.json({ error: "Approval run not found." }, { status: 404 });
   const status = await run.status;
   if (status === "failed" || status === "cancelled") {
+    let failure: { name?: string; message: string } | undefined;
+    if (status === "failed") {
+      try {
+        const workflowRun = await (await getWorld()).runs.get(runId, { resolveData: "all" });
+        failure = workflowFailureDetail(workflowRun.error);
+      } catch (error) {
+        console.error("[redzone:stale-pr] Could not read approval workflow failure details", {
+          runId,
+          error: error instanceof Error ? { name: error.name, message: error.message } : "Unknown error",
+        });
+      }
+    }
+    console.error("[redzone:stale-pr] Approval workflow reached a terminal error state", {
+      runId,
+      status,
+      ...(failure ? { failure } : {}),
+    });
     return Response.json({ status, error: "The review decision could not be recorded." }, { status: 500 });
   }
   if (status === "completed") {
