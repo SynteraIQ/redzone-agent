@@ -180,7 +180,8 @@ export async function GET(request: NextRequest): Promise<Response> {
           typeof requestId !== "string" || !requestId
         ) return [];
         const startedAt = toIsoTimestamp(run.startedAt ?? run.createdAt);
-        if (Date.parse(startedAt) < oneDayAgo) return [];
+        const startedAtTimestamp = Date.parse(startedAt);
+        if (!Number.isFinite(startedAtTimestamp) || startedAtTimestamp < oneDayAgo) return [];
         return [{
           runRef: createStalePullRequestRunReference(run.runId, selected.repository, selected.subject, requestId),
           requestId,

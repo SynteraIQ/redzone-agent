@@ -52,6 +52,18 @@ type StalePullRequestScanResult = {
   candidates: StalePullRequestCandidate[];
 };
 
+function failedScanStep(error: unknown): StalePullRequestProgressEvent["stepId"] {
+  const seen = new Set<object>();
+  while (error && typeof error === "object" && !seen.has(error)) {
+    seen.add(error);
+    if ("stepId" in error && (
+      error.stepId === "fetch-open-pull-requests" || error.stepId === "apply-staleness-rule"
+    )) return error.stepId;
+    error = "cause" in error ? error.cause : undefined;
+  }
+  return "fetch-open-pull-requests";
+}
+
 export async function runStalePullRequestWorkflow(
   input: StalePullRequestWorkflowInput,
 ): Promise<StalePullRequestWorkflowResult> {
@@ -61,7 +73,7 @@ export async function runStalePullRequestWorkflow(
   try {
     scan = await scanStalePullRequests(input);
   } catch (error) {
-    await markProgressStepFailed("fetch-open-pull-requests", "The scan could not complete. Check the run error for details.");
+    await markProgressStepFailed(failedScanStep(error), "The scan could not complete. Check the run error for details.");
     throw error;
   }
   const threshold = inactivityThreshold(input.config);
@@ -134,12 +146,10 @@ async function scanStalePullRequests(
     });
     return { scannedPullRequestCount: pullRequests.length, candidates };
   } catch (error) {
-    await writer.write({
-      stepId: activeStep,
-      status: "failed",
-      detail: "This step did not complete. Check the run error for details.",
-    });
-    throw error;
+    const failure = error instanceof Error ? error : new Error("The scan could not complete.", { cause: error });
+    // Error causes survive step serialization and the runtime's retry-exhaustion wrapper.
+    failure.cause = { stepId: activeStep, cause: failure.cause };
+    throw failure;
   } finally {
     writer.releaseLock();
   }
