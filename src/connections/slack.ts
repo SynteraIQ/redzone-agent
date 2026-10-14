@@ -1,4 +1,4 @@
-import { ConnectError, getToken } from "@vercel/connect";
+import { ConnectError, deleteTokenCacheEntry, getToken, type ConnectTokenParams } from "@vercel/connect";
 
 export type SlackConnectionStatus =
   | { state: "not-configured"; message: string }
@@ -33,7 +33,8 @@ export async function verifySlackConnection(): Promise<SlackConnectionStatus> {
   }
 
   try {
-    const token = await getToken(connector, { subject: { type: "app" }, scopes: [] });
+    const tokenParams: ConnectTokenParams = { subject: { type: "app" }, scopes: [] };
+    const token = await getToken(connector, tokenParams);
     const response = await fetch("https://slack.com/api/auth.test", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
@@ -44,6 +45,7 @@ export async function verifySlackConnection(): Promise<SlackConnectionStatus> {
     }
     const result = await response.json() as SlackAuthResponse;
     if (!result.ok || !result.team || !result.team_id || !result.user) {
+      if (result.ok === false) deleteTokenCacheEntry(connector, tokenParams);
       console.error("[redzone:connections] Slack rejected the Vercel Connect credential", {
         connector,
         error: result.error ?? "incomplete-auth-response",
