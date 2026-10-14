@@ -141,6 +141,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
   const [history, setHistory] = useState<StalePullRequestHistoryRun[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [openingHistoryRunId, setOpeningHistoryRunId] = useState<string | null>(null);
   const activeRun = useRef<AbortController | null>(null);
 
   useEffect(() => () => {
@@ -188,6 +189,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
     activeRun.current?.abort();
     const controller = new AbortController();
     activeRun.current = controller;
+    setOpeningHistoryRunId(null);
     let deadlineTimer: number | undefined;
     let timedOut = false;
     setLoading(true);
@@ -256,10 +258,8 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
     const controller = new AbortController();
     activeRun.current = controller;
     let timedOut = false;
-    setLoading(true);
+    setOpeningHistoryRunId(run.requestId);
     setError(null);
-    setResult(null);
-    setProgress({});
     setInactivityThreshold(String(run.threshold));
     setInactivityUnit(run.unit);
     setIncludeDrafts(run.includeDrafts);
@@ -284,9 +284,9 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       }
     } finally {
       window.clearTimeout(deadlineTimer);
+      if (openingHistoryRunId === run.requestId) setOpeningHistoryRunId(null);
       if (activeRun.current === controller) {
         activeRun.current = null;
-        setLoading(false);
       }
     }
   }
@@ -311,7 +311,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       <form className="automation-config" onSubmit={runStalePullRequestWorkflow}>
         <label className="automation-field"><span>NO UPDATES FOR</span><span className="automation-number"><input type="number" min={1} max={inactivityUnit === "hours" ? 365 * 24 : 365} required value={inactivityThreshold} placeholder="Set amount" onChange={(event) => setInactivityThreshold(event.target.value)} /><select aria-label="Inactivity unit" value={inactivityUnit} onChange={(event) => setInactivityUnit(event.target.value as "hours" | "days")}><option value="hours">hours</option><option value="days">days</option></select></span></label>
         <label className="automation-checkbox"><input type="checkbox" checked={includeDrafts} onChange={(event) => setIncludeDrafts(event.target.checked)} /><span>Include draft pull requests</span></label>
-        <button className="plan-button" type="submit" disabled={loading || inactivityThreshold === ""}>
+        <button className="plan-button" type="submit" disabled={loading || openingHistoryRunId !== null || inactivityThreshold === ""}>
           {loading ? <><span className="spinner" /> Running workflow</> : <>Run report <span>↗</span></>}
         </button>
       </form>
@@ -330,6 +330,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       <section className="automation-history" aria-label="Recent stale PR runs">
         <div className="automation-history-header"><div><span className="section-kicker">LAST 24 HOURS</span><h3>Recent runs</h3></div><button type="button" onClick={() => void refreshHistory()} disabled={historyLoading}>{historyLoading ? "Refreshing…" : "Refresh"}</button></div>
         {historyError && <div className="error-banner" role="alert">{historyError}</div>}
+        {openingHistoryRunId && <p className="automation-history-empty" role="status">Loading report or waiting for this run to finish…</p>}
         {historyLoading && history.length === 0 ? <p className="automation-history-empty">Loading recent runs…</p> : history.length === 0 ? <p className="automation-history-empty">No runs recorded in the available history yet.</p> : (
           <div className="automation-history-list">
             {history.map((run) => (
@@ -337,7 +338,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
                 <div className="automation-history-main"><strong>{run.repository}</strong><span>{runDate(run.startedAt)}</span></div>
                 <div className="automation-history-meta"><span>{run.threshold} {run.unit} inactive</span><span>{run.includeDrafts ? "Drafts included" : "Drafts excluded"}</span></div>
                 <span className={`automation-history-status status-${run.status}`}>{run.status}</span>
-                <button type="button" onClick={() => void openHistoryRun(run)} disabled={loading || run.status === "failed" || run.status === "cancelled"}>{run.status === "completed" ? "View report" : run.status === "failed" || run.status === "cancelled" ? "Unavailable" : "Resume run"}</button>
+                <button type="button" onClick={() => void openHistoryRun(run)} disabled={loading || openingHistoryRunId !== null || run.status === "failed" || run.status === "cancelled"}>{openingHistoryRunId === run.requestId ? "Loading…" : run.status === "completed" ? "View report" : run.status === "failed" || run.status === "cancelled" ? "Unavailable" : "Resume run"}</button>
               </article>
             ))}
           </div>
