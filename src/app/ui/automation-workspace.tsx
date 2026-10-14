@@ -40,6 +40,8 @@ type StalePullRequestHistoryRun = {
   threshold: number;
   unit: "hours" | "days";
   includeDrafts: boolean;
+  actor: string;
+  authentication: "GitHub OAuth" | "Local development mode" | "Not recorded";
 };
 
 const stalePullRequestSteps: Array<{
@@ -336,7 +338,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
             {history.map((run) => (
               <article className="automation-history-row" key={run.requestId}>
                 <div className="automation-history-main"><strong>{run.repository}</strong><span>{runDate(run.startedAt)}</span></div>
-                <div className="automation-history-meta"><span>{run.threshold} {run.unit} inactive</span><span>{run.includeDrafts ? "Drafts included" : "Drafts excluded"}</span></div>
+                <div className="automation-history-meta"><span>{run.threshold} {run.unit} inactive</span><span>{run.includeDrafts ? "Drafts included" : "Drafts excluded"} · by {run.actor} ({run.authentication})</span></div>
                 <span className={`automation-history-status status-${run.status}`}>{run.status}</span>
                 <button type="button" onClick={() => void openHistoryRun(run)} disabled={loading || openingHistoryRunId !== null || run.status === "failed" || run.status === "cancelled"}>{openingHistoryRunId === run.requestId ? "Loading…" : run.status === "completed" ? "View report" : run.status === "failed" || run.status === "cancelled" ? "Unavailable" : "Resume run"}</button>
               </article>
@@ -350,6 +352,19 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
           <ol className="automation-steps">
             {result.steps.map((step) => <li key={step.id}><span className="automation-step-check">✓</span><div><strong>{step.id.replaceAll("-", " ")}</strong><span>{step.detail}</span></div></li>)}
           </ol>
+          {result.trustRecord && <details className="automation-trust-record">
+            <summary><span>Run trust record</span><span>Scope documented · evidence linked</span></summary>
+            <div className="automation-trust-grid">
+              <div><span>REQUESTED BY</span><strong>{result.trustRecord.actor}</strong><small>{result.trustRecord.authentication}</small></div>
+              <div><span>RUN TIME</span><strong>{runDate(result.trustRecord.requestedAt)}</strong><small>{result.trustRecord.repository}</small></div>
+              <div><span>CONFIGURATION</span><strong>{result.trustRecord.inactivityThreshold} without updates</strong><small>{result.trustRecord.includeDrafts ? "Drafts included" : "Drafts excluded"}</small></div>
+              <div><span>ACCESS BOUNDARY</span><strong>Installation token scoped to this repository</strong><small>{result.trustRecord.permissions.join(" · ") || "No GitHub API access used"}</small></div>
+            </div>
+            <div className="automation-trust-section"><strong>Decision rule</strong><p>{result.trustRecord.decisionRule}</p></div>
+            <div className="automation-trust-section"><strong>Evidence</strong><p>{result.trustRecord.coverage} {result.candidates.length} matched pull requests are listed below with links to their GitHub records and update dates.</p></div>
+            <div className="automation-trust-section"><strong>Actions</strong><p>{result.trustRecord.writesPerformed ? "GitHub changes were made during this run." : "No GitHub changes were made during this run."}</p></div>
+            <div className="automation-trust-section"><strong>Limits</strong><ul>{result.trustRecord.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></div>
+          </details>}
           {result.candidates.length > 0 ? (
             <div className="stale-pr-list">
               {result.candidates.map((candidate) => (
