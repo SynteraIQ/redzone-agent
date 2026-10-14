@@ -12,6 +12,7 @@ import {
 import { StalePullRequestRunSchema } from "../../../../automations/stale-pr/schema.ts";
 import {
   runStalePullRequestWorkflow,
+  type StalePullRequestProgressEvent,
   type StalePullRequestWorkflowResult,
 } from "../../../../automations/stale-pr/workflow.ts";
 
@@ -115,6 +116,22 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     const run = getRun<StalePullRequestWorkflowResult>(runReference.runId);
     if (!(await run.exists)) return Response.json({ error: "Automation run not found." }, { status: 404 });
+    if (request.nextUrl.searchParams.get("events") === "true") {
+      const eventStream = run.getReadable<StalePullRequestProgressEvent>().pipeThrough(
+        new TransformStream<StalePullRequestProgressEvent, Uint8Array>({
+          transform(event, controller) {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+          },
+        }),
+      );
+      return new Response(eventStream, {
+        headers: {
+          "Cache-Control": "private, no-cache, no-transform",
+          Connection: "keep-alive",
+          "Content-Type": "text/event-stream; charset=utf-8",
+        },
+      });
+    }
     const status = await run.status;
     const response = status === "completed"
       ? Response.json({ status, requestId: runReference.requestId, repository: runReference.repository, result: await run.returnValue })

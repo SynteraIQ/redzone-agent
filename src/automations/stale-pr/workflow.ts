@@ -1,6 +1,7 @@
 import type { OpenPullRequest } from "../../github.ts";
 import { collectOpenPullRequests } from "../../github.ts";
 import { createInstallationTokenForWorkflow } from "../../github-app.ts";
+import { getWritable } from "workflow";
 
 export type StalePullRequestConfig = { includeDrafts: boolean } & (
   | { staleAfterHours: number; staleAfterDays?: never }
@@ -20,6 +21,12 @@ export type StalePullRequestWorkflowResult = {
   }>;
   scannedPullRequestCount: number;
   candidates: StalePullRequestCandidate[];
+};
+
+export type StalePullRequestProgressEvent = {
+  stepId: "fetch-open-pull-requests" | "apply-staleness-rule" | "prepare-report";
+  status: "running" | "completed" | "failed";
+  detail: string;
 };
 
 export type StalePullRequestWorkflowInput = {
@@ -50,8 +57,20 @@ export async function runStalePullRequestWorkflow(
 ): Promise<StalePullRequestWorkflowResult> {
   "use workflow";
 
-  const scan = await scanStalePullRequests(input);
+  let scan: StalePullRequestScanResult;
+  try {
+    scan = await scanStalePullRequests(input);
+  } catch (error) {
+    await markProgressStepFailed("fetch-open-pull-requests", "The scan could not complete. Check the run error for details.");
+    throw error;
+  }
   const threshold = inactivityThreshold(input.config);
+  try {
+    await markReportPrepared();
+  } catch (error) {
+    await markProgressStepFailed("prepare-report", "The report could not be prepared. Check the run error for details.");
+    throw error;
+  }
   return {
     steps: [
       {
@@ -79,16 +98,76 @@ async function scanStalePullRequests(
 ): Promise<StalePullRequestScanResult> {
   "use step";
 
-  const token = await createInstallationTokenForWorkflow(input.installationId, input.repository);
-  const pullRequests = await collectOpenPullRequests(input.repository, token, input.requestId);
-  const candidates = identifyStalePullRequests(pullRequests, input.config, new Date(input.startedAt));
-  console.info("[redzone:stale-pr] Durable scan step completed", {
-    requestId: input.requestId,
-    repository: input.repository,
-    scannedPullRequestCount: pullRequests.length,
-    candidateCount: candidates.length,
+  const writer = getWritable<StalePullRequestProgressEvent>().getWriter();
+  let activeStep: StalePullRequestProgressEvent["stepId"] = "fetch-open-pull-requests";
+  try {
+    await writer.write({
+      stepId: activeStep,
+      status: "running",
+      detail: "Fetching open pull requests from GitHub.",
+    });
+    const token = await createInstallationTokenForWorkflow(input.installationId, input.repository);
+    const pullRequests = await collectOpenPullRequests(input.repository, token, input.requestId);
+    await writer.write({
+      stepId: activeStep,
+      status: "completed",
+      detail: `Fetched ${pullRequests.length} open pull requests from GitHub.`,
+    });
+
+    activeStep = "apply-staleness-rule";
+    await writer.write({
+      stepId: activeStep,
+      status: "running",
+      detail: "Applying the selected inactivity threshold.",
+    });
+    const candidates = identifyStalePullRequests(pullRequests, input.config, new Date(input.startedAt));
+    await writer.write({
+      stepId: activeStep,
+      status: "completed",
+      detail: `Found ${candidates.length} pull requests that meet the inactivity threshold.`,
+    });
+    console.info("[redzone:stale-pr] Durable scan step completed", {
+      requestId: input.requestId,
+      repository: input.repository,
+      scannedPullRequestCount: pullRequests.length,
+      candidateCount: candidates.length,
+    });
+    return { scannedPullRequestCount: pullRequests.length, candidates };
+  } catch (error) {
+    await writer.write({
+      stepId: activeStep,
+      status: "failed",
+      detail: "This step did not complete. Check the run error for details.",
+    });
+    throw error;
+  } finally {
+    writer.releaseLock();
+  }
+}
+
+async function markReportPrepared(): Promise<void> {
+  "use step";
+
+  const writer = getWritable<StalePullRequestProgressEvent>().getWriter();
+  await writer.write({
+    stepId: "prepare-report",
+    status: "completed",
+    detail: "Prepared an evidence-linked report. No GitHub changes were made.",
   });
-  return { scannedPullRequestCount: pullRequests.length, candidates };
+  await writer.close();
+  writer.releaseLock();
+}
+
+async function markProgressStepFailed(
+  stepId: StalePullRequestProgressEvent["stepId"],
+  detail: string,
+): Promise<void> {
+  "use step";
+
+  const writer = getWritable<StalePullRequestProgressEvent>().getWriter();
+  await writer.write({ stepId, status: "failed", detail });
+  await writer.close();
+  writer.releaseLock();
 }
 
 export function identifyStalePullRequests(
