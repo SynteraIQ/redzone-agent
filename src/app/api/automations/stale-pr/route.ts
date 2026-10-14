@@ -42,7 +42,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
   const parsed = StalePullRequestRunSchema.safeParse(rawBody);
   if (!parsed.success) {
-    return Response.json({ error: "Choose an inactivity threshold from 1 to 365 days." }, { status: 400 });
+    return Response.json({ error: "Choose a threshold from 1 to 365 days or 1 to 8760 hours." }, { status: 400 });
   }
 
   const requestId = randomUUID();
@@ -61,7 +61,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     console.info("[redzone:stale-pr] Durable run requested", {
       requestId,
       repository,
-      staleAfterDays: parsed.data.staleAfterDays,
+      inactivityThreshold: "staleAfterHours" in parsed.data
+        ? `${parsed.data.staleAfterHours} hours`
+        : `${parsed.data.staleAfterDays} days`,
       includeDrafts: parsed.data.includeDrafts,
     });
     const run = await start(runStalePullRequestWorkflow, [{
