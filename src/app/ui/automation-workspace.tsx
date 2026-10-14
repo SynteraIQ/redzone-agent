@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { StalePullRequestWorkflowResult } from "../../automations/stale-pr/workflow.ts";
 
@@ -25,8 +25,21 @@ type StalePullRequestRunResponse = {
   error?: string;
 };
 
-function waitForNextPoll(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 1200));
+const POLLING_TIMEOUT_MS = 2 * 60 * 1000;
+
+function waitForNextPoll(signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, 1200);
+    function onAbort() {
+      window.clearTimeout(timer);
+      reject(signal.reason);
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function updatedDate(value: string): string {
@@ -41,6 +54,12 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<StalePullRequestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const activeRun = useRef<AbortController | null>(null);
+
+  useEffect(() => () => {
+    activeRun.current?.abort();
+    activeRun.current = null;
+  }, []);
 
   async function runStalePullRequestWorkflow(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -50,12 +69,18 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       setError(`Choose an inactivity threshold from 1 to ${maximum} ${inactivityUnit}.`);
       return;
     }
+    activeRun.current?.abort();
+    const controller = new AbortController();
+    activeRun.current = controller;
+    let deadlineTimer: number | undefined;
+    let timedOut = false;
     setLoading(true);
     setError(null);
     setResult(null);
     try {
       const response = await fetch("/api/automations/stale-pr", {
         method: "POST",
+        signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           [inactivityUnit === "hours" ? "staleAfterHours" : "staleAfterDays"]: threshold,
@@ -63,19 +88,26 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
         }),
       });
       const payload = await response.json().catch(() => null) as StalePullRequestRunResponse | null;
+      controller.signal.throwIfAborted();
       if (!payload) throw new Error("Could not run this automation.");
       if (!response.ok) {
         const requestReference = payload.requestId ? ` (request ${payload.requestId})` : "";
         throw new Error(`${payload.error ?? "Could not run this automation."}${requestReference}`);
       }
       if (!payload.runRef) throw new Error("The automation started without a run reference.");
-      while (true) {
-        await waitForNextPoll();
+      deadlineTimer = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, POLLING_TIMEOUT_MS);
+      while (!controller.signal.aborted) {
+        await waitForNextPoll(controller.signal);
+        controller.signal.throwIfAborted();
         const statusResponse = await fetch(
           `/api/automations/stale-pr?runRef=${encodeURIComponent(payload.runRef)}`,
-          { cache: "no-store" },
+          { cache: "no-store", signal: controller.signal },
         );
         const status = await statusResponse.json().catch(() => null) as StalePullRequestRunResponse | null;
+        controller.signal.throwIfAborted();
         if (!status) throw new Error("Could not read the automation run status.");
         if (!statusResponse.ok || status.status === "failed" || status.status === "cancelled") {
           const requestReference = status.requestId ? ` (request ${status.requestId})` : "";
@@ -87,9 +119,19 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
         }
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not run this automation.");
+      if (activeRun.current === controller) {
+        if (timedOut) {
+          setError("The workflow is still running after two minutes. Stopped waiting for its result.");
+        } else if (!controller.signal.aborted) {
+          setError(caught instanceof Error ? caught.message : "Could not run this automation.");
+        }
+      }
     } finally {
-      setLoading(false);
+      window.clearTimeout(deadlineTimer);
+      if (activeRun.current === controller) {
+        activeRun.current = null;
+        setLoading(false);
+      }
     }
   }
 
@@ -130,7 +172,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
               {result.candidates.map((candidate) => (
                 <article className="stale-pr-card" key={candidate.number}>
                   <div><a href={`https://github.com/${result.repository}/pull/${candidate.number}`} target="_blank" rel="noreferrer">#{candidate.number} {candidate.title}</a><span>by @{candidate.author}{candidate.draft ? " · draft" : ""}</span></div>
-                  <div className="stale-pr-age"><strong>{candidate.hoursSinceUpdate < 24 ? candidate.hoursSinceUpdate : candidate.daysSinceUpdate}</strong><span>{candidate.hoursSinceUpdate < 24 ? "hours since update" : "days since update"}</span><small>Updated {updatedDate(candidate.updatedAt)}</small></div>
+                  <div className="stale-pr-age"><strong>{inactivityUnit === "hours" || candidate.hoursSinceUpdate < 24 ? candidate.hoursSinceUpdate : candidate.daysSinceUpdate}</strong><span>{inactivityUnit === "hours" || candidate.hoursSinceUpdate < 24 ? "hours since update" : "days since update"}</span><small>Updated {updatedDate(candidate.updatedAt)}</small></div>
                 </article>
               ))}
             </div>
