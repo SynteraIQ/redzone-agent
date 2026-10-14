@@ -125,8 +125,12 @@ async function waitForStalePullRequestRun(
       const requestReference = payload.requestId ? ` (request ${payload.requestId})` : "";
       throw new Error(`${payload.error ?? "The stale pull request workflow did not complete."}${requestReference}`);
     }
-    if (payload.status === "completed" && payload.result && payload.repository) {
-      return { requestId: payload.requestId, repository: payload.repository, result: payload.result };
+    if (payload.status === "completed") {
+      if (payload.result && payload.repository) {
+        return { requestId: payload.requestId, repository: payload.repository, result: payload.result };
+      }
+      const requestReference = payload.requestId ? ` (request ${payload.requestId})` : "";
+      throw new Error(`The workflow completed, but its report data is unavailable. Run it again.${requestReference}`);
     }
   }
   throw new Error("Stopped waiting for the workflow result.");
@@ -145,11 +149,16 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [openingHistoryRunId, setOpeningHistoryRunId] = useState<string | null>(null);
   const activeRun = useRef<AbortController | null>(null);
+  const reportRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => () => {
     activeRun.current?.abort();
     activeRun.current = null;
   }, []);
+
+  useEffect(() => {
+    if (result) reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [result]);
 
   const refreshHistory = useCallback(async (signal?: AbortSignal) => {
     setHistoryLoading(true);
@@ -347,7 +356,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
         )}
       </section>
       {result && (
-        <section className="automation-run" aria-label="Stale PR workflow result">
+        <section ref={reportRef} className="automation-run" aria-label="Stale PR workflow result" tabIndex={-1}>
           <div className="automation-run-header"><div><span className="section-kicker">RUN REPORT · {result.repository}</span><h3>{result.candidates.length} stale {result.candidates.length === 1 ? "pull request" : "pull requests"}</h3></div><span>{result.scannedPullRequestCount} scanned</span></div>
           <ol className="automation-steps">
             {result.steps.map((step) => <li key={step.id}><span className="automation-step-check">✓</span><div><strong>{step.id.replaceAll("-", " ")}</strong><span>{step.detail}</span></div></li>)}
