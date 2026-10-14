@@ -20,12 +20,12 @@ export type StalePullRequestApprovalWorkflowInput = {
   requestedAt: string;
 };
 
-export type StalePullRequestApprovalWorkflowResult = StalePullRequestApprovalDecision & {
+export type StalePullRequestApprovalWorkflowResult = (StalePullRequestApprovalDecision & {
   reportRequestId: string;
   repository: string;
   requestedBy: string;
   requestedAt: string;
-};
+}) | { approvalRunId: string };
 
 export async function waitForStalePullRequestApproval(
   input: StalePullRequestApprovalWorkflowInput,
@@ -36,7 +36,7 @@ export async function waitForStalePullRequestApproval(
     token: createStalePullRequestApprovalToken(input.approvalRequestId),
   });
   const conflict = await hook.getConflict();
-  if (conflict) throw new Error("A review decision is already being recorded for this report.");
+  if (conflict) return { approvalRunId: conflict.runId };
   const decision = await hook;
   return {
     reportRequestId: input.reportRequestId,

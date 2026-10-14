@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { getRun, getHookByToken, resumeHook, start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import { getServerSession } from "next-auth";
@@ -136,6 +135,7 @@ async function approvalStatus(
   }
   if (status === "completed") {
     const result = await run.returnValue;
+    if ("approvalRunId" in result) return approvalStatus(result.approvalRunId, runReference);
     return Response.json({ status, approvalRef: createStalePullRequestRunReference(
       runId,
       runReference.repository,
@@ -153,6 +153,7 @@ async function approvalStatus(
   let ready = false;
   try {
     const hook = await getHookByToken(createStalePullRequestApprovalToken(runReference.requestId));
+    if (hook.runId !== runId) return approvalStatus(hook.runId, runReference);
     ready = hook.runId === runId;
   } catch {
     ready = false;
@@ -262,7 +263,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         approvalRun = null;
       }
       if (!approvalRun) {
-        const approvalRequestId = randomUUID();
+        // Hook registration arbitrates concurrent starts for the same report.
+        const approvalRequestId = reportReference.runId;
         const requestedAt = new Date().toISOString();
         const started = await start(waitForStalePullRequestApproval, [{
           reportRunId: reportReference.runId,
@@ -321,10 +323,16 @@ export async function POST(request: NextRequest): Promise<Response> {
       decidedAt: new Date().toISOString(),
       ...(parsed.data.rationale ? { rationale: parsed.data.rationale } : {}),
     } as const;
-    await resumeHook(
-      createStalePullRequestApprovalToken(approvalReference.requestId),
-      decision,
-    );
+    const token = createStalePullRequestApprovalToken(approvalReference.requestId);
+    try {
+      const hook = await getHookByToken(token);
+      if (hook.runId !== approvalReference.runId) {
+        return Response.json({ error: "Review step not ready." }, { status: 409 });
+      }
+    } catch {
+      return Response.json({ error: "Review step not ready." }, { status: 409 });
+    }
+    await resumeHook(token, decision);
     const response = Response.json({ status: "running", ready: true, decision });
     response.headers.set("Cache-Control", "private, no-store");
     return response;

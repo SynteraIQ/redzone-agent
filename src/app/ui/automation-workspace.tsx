@@ -188,6 +188,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
     async function loadApprovalStatus() {
       setApprovalStatus(null);
       setApprovalError(null);
+      setApprovalRationale("");
       try {
         const response = await fetch(`/api/automations/stale-pr/approval?reportRef=${encodeURIComponent(reportRunRef)}`, {
           cache: "no-store",
