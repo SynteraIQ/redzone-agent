@@ -2,7 +2,7 @@ import type { OpenPullRequest } from "../../github.ts";
 import { collectOpenPullRequests } from "../../github.ts";
 import { createInstallationTokenForWorkflow } from "../../github-app.ts";
 import { createHook, getWritable } from "workflow";
-import { createStalePullRequestApprovalToken } from "./run-reference.ts";
+import { createStalePullRequestApprovalToken } from "./approval-token.ts";
 
 export type StalePullRequestApprovalDecision = {
   decision: "approved" | "rejected";

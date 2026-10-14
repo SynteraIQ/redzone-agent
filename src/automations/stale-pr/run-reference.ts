@@ -21,10 +21,6 @@ export function createStalePullRequestSubjectKey(subject: string): string {
   return signature(`stale-pr-history:${subject}`).toString("base64url");
 }
 
-export function createStalePullRequestApprovalToken(approvalRequestId: string): string {
-  return `stale-pr-approval:${signature(`stale-pr-approval:${approvalRequestId}`).toString("base64url")}`;
-}
-
 export function createStalePullRequestRunReference(
   runId: string,
   repository: string,

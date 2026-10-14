@@ -6,8 +6,8 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { authOptions, githubOAuthConfigured } from "../../../../../auth.ts";
 import { getSelectedRepositoryContextForRequest } from "../../../../../github-app.ts";
+import { createStalePullRequestApprovalToken } from "../../../../../automations/stale-pr/approval-token.ts";
 import {
-  createStalePullRequestApprovalToken,
   createStalePullRequestRunReference,
   createStalePullRequestSubjectKey,
   readStalePullRequestRunReference,
