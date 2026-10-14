@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 type StalePullRequestRunReference = {
+  kind: "report" | "approval";
   runId: string;
   repository: string;
   subject: string;
@@ -20,13 +21,19 @@ export function createStalePullRequestSubjectKey(subject: string): string {
   return signature(`stale-pr-history:${subject}`).toString("base64url");
 }
 
+export function createStalePullRequestApprovalToken(approvalRequestId: string): string {
+  return `stale-pr-approval:${signature(`stale-pr-approval:${approvalRequestId}`).toString("base64url")}`;
+}
+
 export function createStalePullRequestRunReference(
   runId: string,
   repository: string,
   subject: string,
   requestId: string,
+  kind: StalePullRequestRunReference["kind"] = "report",
 ): string {
   const payload: StalePullRequestRunReference = {
+    kind,
     runId,
     repository,
     subject,
@@ -59,13 +66,14 @@ export function readStalePullRequestRunReference(
   try {
     const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Partial<StalePullRequestRunReference>;
     if (
+      (payload.kind !== undefined && payload.kind !== "report" && payload.kind !== "approval") ||
       typeof payload.runId !== "string" || !/^wrun_[A-Za-z0-9_-]+$/.test(payload.runId) ||
       typeof payload.repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(payload.repository) ||
       typeof payload.subject !== "string" || !payload.subject ||
       typeof payload.requestId !== "string" || !payload.requestId ||
       typeof payload.expiresAt !== "number" || payload.expiresAt <= Math.floor(Date.now() / 1000)
     ) return null;
-    return payload as StalePullRequestRunReference;
+    return { ...payload, kind: payload.kind ?? "report" } as StalePullRequestRunReference;
   } catch {
     return null;
   }
