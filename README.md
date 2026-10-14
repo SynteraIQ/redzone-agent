@@ -4,6 +4,8 @@ Red Zone looks for historical risk signals related to the code being changed. It
 
 ## Architecture
 
+See [Product Platform Architecture](./docs/architecture.md) for the proposed shared platform model and product boundaries.
+
 ```mermaid
 flowchart TD
     UI[Next.js dashboard] --> API[POST /api/analyze]
