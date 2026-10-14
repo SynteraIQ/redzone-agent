@@ -153,6 +153,14 @@ async function markReportPrepared(): Promise<void> {
     stepId: "prepare-report",
     status: "completed",
     detail: "Prepared an evidence-linked report. No GitHub changes were made.",
+  const token = await createInstallationTokenForWorkflow(input.installationId, input.repository);
+  const pullRequests = await collectOpenPullRequests(input.repository, token, input.requestId);
+  const candidates = identifyStalePullRequests(pullRequests, input.config);
+  console.info("[redzone:stale-pr] Durable scan step completed", {
+    requestId: input.requestId,
+    repository: input.repository,
+    scannedPullRequestCount: pullRequests.length,
+    candidateCount: candidates.length,
   });
   await writer.close();
   writer.releaseLock();
