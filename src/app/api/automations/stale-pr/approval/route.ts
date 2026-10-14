@@ -292,9 +292,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     response.headers.set("Cache-Control", "private, no-store");
     return response;
   } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown approval error";
     console.error("[redzone:stale-pr] Approval request failed", {
-      error: error instanceof Error ? { name: error.name, message: error.message } : "Unknown approval error",
+      error: error instanceof Error ? { name: error.name, message: detail } : detail,
     });
-    return Response.json({ error: "Could not start or record the review decision." }, { status: 500 });
+    const message = process.env.NODE_ENV === "production"
+      ? "Could not start or record the review decision."
+      : `Could not start or record the review decision: ${detail}`;
+    return Response.json({ error: message }, { status: 500 });
   }
 }
