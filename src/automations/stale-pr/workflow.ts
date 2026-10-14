@@ -1,7 +1,51 @@
 import type { OpenPullRequest } from "../../github.ts";
 import { collectOpenPullRequests } from "../../github.ts";
 import { createInstallationTokenForWorkflow } from "../../github-app.ts";
-import { getWritable } from "workflow";
+import { createHook, getWritable } from "workflow";
+import { createStalePullRequestApprovalToken } from "./approval-token.ts";
+
+export type StalePullRequestApprovalDecision = {
+  decision: "approved" | "rejected";
+  actor: string;
+  decidedAt: string;
+  rationale?: string;
+};
+
+export type StalePullRequestApprovalWorkflowInput = {
+  reportRunId: string;
+  reportRequestId: string;
+  repository: string;
+  approvalRequestId: string;
+  requestedBy: string;
+  requestedAt: string;
+};
+
+export type StalePullRequestApprovalWorkflowResult = (StalePullRequestApprovalDecision & {
+  reportRequestId: string;
+  repository: string;
+  requestedBy: string;
+  requestedAt: string;
+}) | { approvalRunId: string };
+
+export async function waitForStalePullRequestApproval(
+  input: StalePullRequestApprovalWorkflowInput,
+): Promise<StalePullRequestApprovalWorkflowResult> {
+  "use workflow";
+
+  const hook = createHook<StalePullRequestApprovalDecision>({
+    token: createStalePullRequestApprovalToken(input.approvalRequestId),
+  });
+  const conflict = await hook.getConflict();
+  if (conflict) return { approvalRunId: conflict.runId };
+  const decision = await hook;
+  return {
+    reportRequestId: input.reportRequestId,
+    repository: input.repository,
+    requestedBy: input.requestedBy,
+    requestedAt: input.requestedAt,
+    ...decision,
+  };
+}
 
 export type StalePullRequestConfig = { includeDrafts: boolean } & (
   | { staleAfterHours: number; staleAfterDays?: never }

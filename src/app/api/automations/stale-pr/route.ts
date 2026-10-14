@@ -217,7 +217,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const runReference = readStalePullRequestRunReference(request.nextUrl.searchParams.get("runRef"));
-  if (!runReference) return Response.json({ error: "This automation run link is invalid or expired." }, { status: 400 });
+  if (!runReference || runReference.kind !== "report") {
+    return Response.json({ error: "This automation run link is invalid or expired." }, { status: 400 });
+  }
 
   try {
     const selected = await getSelectedRepositoryContextForRequest(request);

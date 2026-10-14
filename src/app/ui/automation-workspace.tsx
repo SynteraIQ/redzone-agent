@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type {
+  StalePullRequestApprovalDecision,
   StalePullRequestProgressEvent,
   StalePullRequestWorkflowResult,
 } from "../../automations/stale-pr/workflow.ts";
@@ -15,6 +16,7 @@ type AutomationWorkspaceProps = {
 
 type StalePullRequestResponse = StalePullRequestWorkflowResult & {
   repository: string;
+  runRef?: string;
   requestId?: string;
   threshold?: number;
   unit?: "hours" | "days";
@@ -29,6 +31,18 @@ type StalePullRequestRunResponse = {
   repository?: string;
   result?: StalePullRequestWorkflowResult;
   error?: string;
+};
+
+type StalePullRequestApprovalStatus = {
+  status: "not-requested" | "pending" | "running" | "completed" | "failed" | "cancelled";
+  ready?: boolean;
+  approvalRef?: string;
+  decision?: StalePullRequestApprovalDecision;
+  error?: string;
+};
+
+type StalePullRequestApprovalResponse = StalePullRequestApprovalStatus & {
+  decision?: StalePullRequestApprovalDecision;
 };
 
 type StalePullRequestHistoryRun = {
@@ -111,7 +125,7 @@ function runDate(value: string): string {
 async function waitForStalePullRequestRun(
   runRef: string,
   signal: AbortSignal,
-): Promise<{ requestId?: string; repository: string; result: StalePullRequestWorkflowResult }> {
+): Promise<{ requestId?: string; runRef: string; repository: string; result: StalePullRequestWorkflowResult }> {
   while (!signal.aborted) {
     await waitForNextPoll(signal);
     const response = await fetch(
@@ -127,7 +141,7 @@ async function waitForStalePullRequestRun(
     }
     if (payload.status === "completed") {
       if (payload.result && payload.repository) {
-        return { requestId: payload.requestId, repository: payload.repository, result: payload.result };
+        return { requestId: payload.requestId, runRef, repository: payload.repository, result: payload.result };
       }
       const requestReference = payload.requestId ? ` (request ${payload.requestId})` : "";
       throw new Error(`The workflow completed, but its report data is unavailable. Run it again.${requestReference}`);
@@ -148,6 +162,10 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [openingHistoryRunId, setOpeningHistoryRunId] = useState<string | null>(null);
+  const [approvalStatus, setApprovalStatus] = useState<StalePullRequestApprovalStatus | null>(null);
+  const [approvalLoading, setApprovalLoading] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [approvalRationale, setApprovalRationale] = useState("");
   const activeRun = useRef<AbortController | null>(null);
   const reportRef = useRef<HTMLElement | null>(null);
 
@@ -159,6 +177,61 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
   useEffect(() => {
     if (result) reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [result]);
+
+  useEffect(() => {
+    if (!result?.runRef) {
+      setApprovalStatus(null);
+      return;
+    }
+    const reportRunRef = result.runRef;
+    const controller = new AbortController();
+    async function loadApprovalStatus() {
+      setApprovalStatus(null);
+      setApprovalError(null);
+      setApprovalRationale("");
+      try {
+        const response = await fetch(`/api/automations/stale-pr/approval?reportRef=${encodeURIComponent(reportRunRef)}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => null) as StalePullRequestApprovalStatus | null;
+        if (!response.ok || !payload) throw new Error(payload?.error ?? "Could not load the review decision.");
+        setApprovalStatus(payload);
+      } catch (caught) {
+        if (!controller.signal.aborted) setApprovalError(caught instanceof Error ? caught.message : "Could not load the review decision.");
+      }
+    }
+    void loadApprovalStatus();
+    return () => controller.abort();
+  }, [result?.runRef]);
+
+  useEffect(() => {
+    if (
+      !result?.runRef || !approvalStatus?.approvalRef ||
+      (approvalStatus.status !== "pending" && approvalStatus.status !== "running") || approvalStatus.ready
+    ) return;
+    const approvalRef = approvalStatus.approvalRef;
+    const controller = new AbortController();
+    async function waitForApprovalHook() {
+      try {
+        while (!controller.signal.aborted) {
+          await waitForNextPoll(controller.signal);
+          const response = await fetch(`/api/automations/stale-pr/approval?approvalRef=${encodeURIComponent(approvalRef)}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          const payload = await response.json().catch(() => null) as StalePullRequestApprovalStatus | null;
+          if (!response.ok || !payload) throw new Error(payload?.error ?? "Could not check the review step.");
+          setApprovalStatus(payload);
+          if ((payload.status !== "pending" && payload.status !== "running") || payload.ready) return;
+        }
+      } catch (caught) {
+        if (!controller.signal.aborted) setApprovalError(caught instanceof Error ? caught.message : "Could not check the review step.");
+      }
+    }
+    void waitForApprovalHook();
+    return () => controller.abort();
+  }, [approvalStatus?.approvalRef, approvalStatus?.ready, approvalStatus?.status, result?.runRef]);
 
   const refreshHistory = useCallback(async (signal?: AbortSignal) => {
     setHistoryLoading(true);
@@ -241,6 +314,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       setResult({
         ...completed.result,
         repository: completed.repository,
+        runRef: completed.runRef,
         requestId: completed.requestId,
         threshold,
         unit: inactivityUnit,
@@ -283,6 +357,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       setResult({
         ...completed.result,
         repository: completed.repository,
+        runRef: completed.runRef,
         requestId: completed.requestId,
         threshold: run.threshold,
         unit: run.unit,
@@ -299,6 +374,55 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
         activeRun.current = null;
         setOpeningHistoryRunId(null);
       }
+    }
+  }
+
+  async function requestHumanReview() {
+    if (!result?.runRef) return;
+    setApprovalLoading(true);
+    setApprovalError(null);
+    try {
+      const response = await fetch("/api/automations/stale-pr/approval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "request", reportRef: result.runRef }),
+      });
+      const payload = await response.json().catch(() => null) as StalePullRequestApprovalResponse | null;
+      if (!response.ok || !payload) throw new Error(payload?.error ?? "Could not start the human review step.");
+      setApprovalStatus(payload);
+    } catch (caught) {
+      setApprovalError(caught instanceof Error ? caught.message : "Could not start the human review step.");
+    } finally {
+      setApprovalLoading(false);
+    }
+  }
+
+  async function submitHumanDecision(decision: StalePullRequestApprovalDecision["decision"]) {
+    if (!approvalStatus?.approvalRef) return;
+    if (decision === "rejected" && !approvalRationale.trim()) {
+      setApprovalError("Add a short reason when rejecting the report.");
+      return;
+    }
+    setApprovalLoading(true);
+    setApprovalError(null);
+    try {
+      const response = await fetch("/api/automations/stale-pr/approval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "decision",
+          approvalRef: approvalStatus.approvalRef,
+          decision,
+          ...(approvalRationale.trim() ? { rationale: approvalRationale.trim() } : {}),
+        }),
+      });
+      const payload = await response.json().catch(() => null) as StalePullRequestApprovalResponse | null;
+      if (!response.ok || !payload) throw new Error(payload?.error ?? "Could not record the review decision.");
+      setApprovalStatus((current) => current ? { ...current, status: "running", ready: true, decision: payload.decision } : current);
+    } catch (caught) {
+      setApprovalError(caught instanceof Error ? caught.message : "Could not record the review decision.");
+    } finally {
+      setApprovalLoading(false);
     }
   }
 
@@ -374,6 +498,33 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
             <div className="automation-trust-section"><strong>Actions</strong><p>{result.trustRecord.writesPerformed ? "GitHub changes were made during this run." : "No GitHub changes were made during this run."}</p></div>
             <div className="automation-trust-section"><strong>Limits</strong><ul>{result.trustRecord.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></div>
           </details>}
+          <section className="automation-human-review" aria-label="Human review decision">
+            <div><span className="section-kicker">HUMAN REVIEW</span><h4>Review decision</h4></div>
+            <p>This decision is saved in a durable workflow for this report. It records review feedback only; no GitHub changes are made.</p>
+            {approvalError && <div className="error-banner" role="alert">{approvalError}</div>}
+            {!approvalStatus || approvalStatus.status === "not-requested" ? (
+              <button className="plan-button" type="button" onClick={() => void requestHumanReview()} disabled={approvalLoading || !result.runRef}>
+                {approvalLoading ? "Starting review…" : "Start human review"}
+              </button>
+            ) : approvalStatus.decision ? (
+              <div className={`automation-review-decision decision-${approvalStatus.decision.decision}`} role="status">
+                <strong>{approvalStatus.decision.decision === "approved" ? "Report confirmed" : "Report flagged"}</strong>
+                <span>by {approvalStatus.decision.actor} · {runDate(approvalStatus.decision.decidedAt)}</span>
+                {approvalStatus.decision.rationale && <p>{approvalStatus.decision.rationale}</p>}
+              </div>
+            ) : approvalStatus.status === "pending" || approvalStatus.status === "running" ? (
+              <div className="automation-review-pending">
+                <span>{approvalStatus.ready ? "This workflow is waiting for your decision." : "Preparing the durable review step…"}</span>
+                {approvalStatus.ready && <>
+                  <label className="automation-review-rationale"><span>REASON · REQUIRED TO FLAG</span><textarea value={approvalRationale} maxLength={500} onChange={(event) => setApprovalRationale(event.target.value)} placeholder="Add context for the next reviewer" /></label>
+                  <div className="automation-review-actions">
+                    <button type="button" onClick={() => void submitHumanDecision("approved")} disabled={approvalLoading}>{approvalLoading ? "Saving…" : "Confirm report"}</button>
+                    <button type="button" onClick={() => void submitHumanDecision("rejected")} disabled={approvalLoading || !approvalRationale.trim()}>{approvalLoading ? "Saving…" : "Flag report"}</button>
+                  </div>
+                </>}
+              </div>
+            ) : <div className="error-banner" role="alert">This review workflow {approvalStatus.status}.</div>}
+          </section>
           {result.candidates.length > 0 ? (
             <div className="stale-pr-list">
               {result.candidates.map((candidate) => (
