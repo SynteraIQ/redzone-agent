@@ -7,7 +7,7 @@ Identify open pull requests that have had no recent activity, using the inactivi
 ## Evidence
 
 - Use the pull request's GitHub `updated_at` timestamp as the activity signal.
-- Report the pull request URL, author, last update, and elapsed days so a person can verify each candidate.
+- Report the pull request URL, author, last update, and elapsed time so a person can verify each candidate.
 - State that inactivity is a review cue, not proof that a pull request is abandoned.
 
 ## Boundaries

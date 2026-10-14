@@ -16,13 +16,27 @@ type StalePullRequestResponse = StalePullRequestWorkflowResult & {
   error?: string;
 };
 
+type StalePullRequestRunResponse = {
+  requestId?: string;
+  runRef?: string;
+  status?: "running" | "completed" | "failed" | "cancelled";
+  repository?: string;
+  result?: StalePullRequestWorkflowResult;
+  error?: string;
+};
+
+function waitForNextPoll(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 1200));
+}
+
 function updatedDate(value: string): string {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleDateString() : "Unknown";
 }
 
 export function AutomationWorkspace({ repository, connected, configured }: AutomationWorkspaceProps) {
-  const [staleAfterDays, setStaleAfterDays] = useState("");
+  const [inactivityThreshold, setInactivityThreshold] = useState("");
+  const [inactivityUnit, setInactivityUnit] = useState<"hours" | "days">("days");
   const [includeDrafts, setIncludeDrafts] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<StalePullRequestResponse | null>(null);
@@ -30,9 +44,10 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
 
   async function runStalePullRequestWorkflow(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const threshold = Number(staleAfterDays);
-    if (!Number.isInteger(threshold) || threshold < 1 || threshold > 365) {
-      setError("Choose an inactivity threshold from 1 to 365 days.");
+    const threshold = Number(inactivityThreshold);
+    const maximum = inactivityUnit === "hours" ? 365 * 24 : 365;
+    if (!Number.isInteger(threshold) || threshold < 1 || threshold > maximum) {
+      setError(`Choose an inactivity threshold from 1 to ${maximum} ${inactivityUnit}.`);
       return;
     }
     setLoading(true);
@@ -42,15 +57,35 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       const response = await fetch("/api/automations/stale-pr", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ staleAfterDays: threshold, includeDrafts }),
+        body: JSON.stringify({
+          [inactivityUnit === "hours" ? "staleAfterHours" : "staleAfterDays"]: threshold,
+          includeDrafts,
+        }),
       });
-      const payload = await response.json().catch(() => null) as StalePullRequestResponse | null;
+      const payload = await response.json().catch(() => null) as StalePullRequestRunResponse | null;
       if (!payload) throw new Error("Could not run this automation.");
       if (!response.ok) {
         const requestReference = payload.requestId ? ` (request ${payload.requestId})` : "";
         throw new Error(`${payload.error ?? "Could not run this automation."}${requestReference}`);
       }
-      setResult(payload);
+      if (!payload.runRef) throw new Error("The automation started without a run reference.");
+      while (true) {
+        await waitForNextPoll();
+        const statusResponse = await fetch(
+          `/api/automations/stale-pr?runRef=${encodeURIComponent(payload.runRef)}`,
+          { cache: "no-store" },
+        );
+        const status = await statusResponse.json().catch(() => null) as StalePullRequestRunResponse | null;
+        if (!status) throw new Error("Could not read the automation run status.");
+        if (!statusResponse.ok || status.status === "failed" || status.status === "cancelled") {
+          const requestReference = status.requestId ? ` (request ${status.requestId})` : "";
+          throw new Error(`${status.error ?? "The stale pull request workflow did not complete."}${requestReference}`);
+        }
+        if (status.status === "completed" && status.result && status.repository) {
+          setResult({ ...status.result, repository: status.repository, requestId: status.requestId });
+          break;
+        }
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not run this automation.");
     } finally {
@@ -76,9 +111,9 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
       </div>
       <p className="automation-description">Find open pull requests that have not been updated within your chosen window. This run will not comment, label, assign, or close PRs.</p>
       <form className="automation-config" onSubmit={runStalePullRequestWorkflow}>
-        <label className="automation-field"><span>NO ACTIVITY FOR</span><span className="automation-number"><input type="number" min={1} max={365} required value={staleAfterDays} placeholder="Set days" onChange={(event) => setStaleAfterDays(event.target.value)} /><span>days</span></span></label>
+        <label className="automation-field"><span>NO UPDATES FOR</span><span className="automation-number"><input type="number" min={1} max={inactivityUnit === "hours" ? 365 * 24 : 365} required value={inactivityThreshold} placeholder="Set amount" onChange={(event) => setInactivityThreshold(event.target.value)} /><select aria-label="Inactivity unit" value={inactivityUnit} onChange={(event) => setInactivityUnit(event.target.value as "hours" | "days")}><option value="hours">hours</option><option value="days">days</option></select></span></label>
         <label className="automation-checkbox"><input type="checkbox" checked={includeDrafts} onChange={(event) => setIncludeDrafts(event.target.checked)} /><span>Include draft pull requests</span></label>
-        <button className="plan-button" type="submit" disabled={loading || staleAfterDays === ""}>
+        <button className="plan-button" type="submit" disabled={loading || inactivityThreshold === ""}>
           {loading ? <><span className="spinner" /> Running workflow</> : <>Run report <span>↗</span></>}
         </button>
       </form>
@@ -95,7 +130,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
               {result.candidates.map((candidate) => (
                 <article className="stale-pr-card" key={candidate.number}>
                   <div><a href={`https://github.com/${result.repository}/pull/${candidate.number}`} target="_blank" rel="noreferrer">#{candidate.number} {candidate.title}</a><span>by @{candidate.author}{candidate.draft ? " · draft" : ""}</span></div>
-                  <div className="stale-pr-age"><strong>{candidate.daysSinceUpdate}</strong><span>days since update</span><small>Updated {updatedDate(candidate.updatedAt)}</small></div>
+                  <div className="stale-pr-age"><strong>{candidate.hoursSinceUpdate < 24 ? candidate.hoursSinceUpdate : candidate.daysSinceUpdate}</strong><span>{candidate.hoursSinceUpdate < 24 ? "hours since update" : "days since update"}</span><small>Updated {updatedDate(candidate.updatedAt)}</small></div>
                 </article>
               ))}
             </div>
