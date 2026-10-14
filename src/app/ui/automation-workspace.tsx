@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { StalePullRequestWorkflowResult } from "../../automations/stale-pr/workflow.ts";
+import type {
+  StalePullRequestProgressEvent,
+  StalePullRequestWorkflowResult,
+} from "../../automations/stale-pr/workflow.ts";
 
 type AutomationWorkspaceProps = {
   repository: string;
@@ -25,6 +28,17 @@ type StalePullRequestRunResponse = {
   error?: string;
 };
 
+const stalePullRequestSteps: Array<{
+  id: StalePullRequestProgressEvent["stepId"];
+  label: string;
+}> = [
+  { id: "fetch-open-pull-requests", label: "Fetch open pull requests" },
+  { id: "apply-staleness-rule", label: "Apply inactivity threshold" },
+  { id: "prepare-report", label: "Prepare report" },
+];
+
+function waitForNextPoll(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 1200));
 const POLLING_TIMEOUT_MS = 2 * 60 * 1000;
 
 function waitForNextPoll(signal: AbortSignal): Promise<void> {
@@ -42,6 +56,33 @@ function waitForNextPoll(signal: AbortSignal): Promise<void> {
   });
 }
 
+async function streamWorkflowProgress(
+  runRef: string,
+  onProgress: (event: StalePullRequestProgressEvent) => void,
+): Promise<void> {
+  const response = await fetch(
+    `/api/automations/stale-pr?runRef=${encodeURIComponent(runRef)}&events=true`,
+    { cache: "no-store" },
+  );
+  if (!response.ok || !response.body) throw new Error("Workflow progress stream unavailable.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const dataLine = frame.split(/\r?\n/).find((line) => line.startsWith("data:"));
+      if (!dataLine) continue;
+      onProgress(JSON.parse(dataLine.slice(5).trim()) as StalePullRequestProgressEvent);
+    }
+    if (done) return;
+  }
+}
+
 function updatedDate(value: string): string {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleDateString() : "Unknown";
@@ -52,6 +93,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
   const [inactivityUnit, setInactivityUnit] = useState<"hours" | "days">("days");
   const [includeDrafts, setIncludeDrafts] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<Partial<Record<StalePullRequestProgressEvent["stepId"], StalePullRequestProgressEvent>>>({});
   const [result, setResult] = useState<StalePullRequestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const activeRun = useRef<AbortController | null>(null);
@@ -77,6 +119,7 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
     setLoading(true);
     setError(null);
     setResult(null);
+    setProgress({});
     try {
       const response = await fetch("/api/automations/stale-pr", {
         method: "POST",
@@ -95,6 +138,15 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
         throw new Error(`${payload.error ?? "Could not run this automation."}${requestReference}`);
       }
       if (!payload.runRef) throw new Error("The automation started without a run reference.");
+      try {
+        await streamWorkflowProgress(payload.runRef, (event) => {
+          setProgress((current) => ({ ...current, [event.stepId]: event }));
+        });
+      } catch {
+        // Durable status polling below still returns the final report if streaming disconnects.
+      }
+      while (true) {
+        await waitForNextPoll();
       deadlineTimer = window.setTimeout(() => {
         timedOut = true;
         controller.abort();
@@ -160,7 +212,17 @@ export function AutomationWorkspace({ repository, connected, configured }: Autom
         </button>
       </form>
       {error && <div className="error-banner" role="alert">{error}</div>}
-      {loading && <div className="automation-running" role="status"><span className="spinner" /> Fetching open pull requests and applying the staleness rule…</div>}
+      {loading && <section className="automation-progress" aria-label="Stale PR workflow progress">
+        <div className="automation-running" role="status"><span className="spinner" /> Workflow is running</div>
+        <ol className="automation-steps">
+          {stalePullRequestSteps.map((step) => {
+            const update = progress[step.id];
+            const status = update?.status ?? "pending";
+            const icon = status === "completed" ? "✓" : status === "failed" ? "!" : status === "running" ? "…" : "·";
+            return <li key={step.id}><span className={`automation-step-check automation-step-${status}`} aria-label={status}>{icon}</span><div><strong>{step.label}</strong><span>{update?.detail ?? "Waiting for the previous step."}</span></div></li>;
+          })}
+        </ol>
+      </section>}
       {result && (
         <section className="automation-run" aria-label="Stale PR workflow result">
           <div className="automation-run-header"><div><span className="section-kicker">LATEST RUN · {result.repository}</span><h3>{result.candidates.length} stale {result.candidates.length === 1 ? "pull request" : "pull requests"}</h3></div><span>{result.scannedPullRequestCount} scanned</span></div>
