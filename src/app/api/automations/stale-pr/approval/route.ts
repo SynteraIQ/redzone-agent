@@ -252,6 +252,15 @@ export async function POST(request: NextRequest): Promise<Response> {
         return Response.json({ error: "The report must finish before it can be reviewed." }, { status: 409 });
       }
       let approvalRun = await findApprovalRun(subjectKey, reportReference.repository, reportReference.runId);
+      if (approvalRun?.status === "failed" || approvalRun?.status === "cancelled") {
+        console.info("[redzone:stale-pr] Restarting terminal approval workflow", {
+          previousRunId: approvalRun.runId,
+          previousStatus: approvalRun.status,
+          reportRunId: reportReference.runId,
+          repository: reportReference.repository,
+        });
+        approvalRun = null;
+      }
       if (!approvalRun) {
         const approvalRequestId = randomUUID();
         const requestedAt = new Date().toISOString();
