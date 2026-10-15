@@ -89,7 +89,15 @@ function ownersForPath(filePath: string, rules: CodeOwnerRule[]): string[] {
   return owners;
 }
 
-function readCodeowners(repositoryPath: string): { file: string | null; rules: CodeOwnerRule[] } {
+function readCodeowners(
+  repositoryPath: string,
+  remoteCodeowners?: { file: string; contents: string } | null,
+): { file: string | null; rules: CodeOwnerRule[] } {
+  if (remoteCodeowners !== undefined) {
+    return remoteCodeowners
+      ? { file: remoteCodeowners.file, rules: parseCodeowners(remoteCodeowners.contents) }
+      : { file: null, rules: [] };
+  }
   for (const location of codeownersLocations) {
     const filePath = path.join(/*turbopackIgnore: true*/ repositoryPath, location);
     if (!existsSync(filePath)) continue;
@@ -145,8 +153,12 @@ function summarizeContributors(records: ExpertMapActivity[]): ExpertContributorS
   }).sort((left, right) => right.latestActivityAt.localeCompare(left.latestActivityAt));
 }
 
-export function buildExpertMap(scan: ExpertMapScan, repositoryPath: string): ExpertMap {
-  const codeowners = readCodeowners(repositoryPath);
+export function buildExpertMap(
+  scan: ExpertMapScan,
+  repositoryPath: string,
+  remoteCodeowners?: { file: string; contents: string } | null,
+): ExpertMap {
+  const codeowners = readCodeowners(repositoryPath, remoteCodeowners);
   const recordsByPath = new Map<string, ExpertMapActivity[]>();
   for (const record of scan.records) {
     const current = recordsByPath.get(record.filePath) ?? [];

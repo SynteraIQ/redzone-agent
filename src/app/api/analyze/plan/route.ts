@@ -4,14 +4,17 @@ import { z } from "zod";
 import { authOptions, githubOAuthConfigured } from "../../../../auth.ts";
 import { createAnalysisPlan } from "../../../../agents/planner/index.ts";
 import { createSnapshotFingerprint, isValidBaseRef } from "../../../../analysis-plan.ts";
-import { collectReviewEvidence } from "../../../../github.ts";
-import { getInstallationTokenForRequest, getSelectedRepositoryForRequest } from "../../../../github-app.ts";
+import { collectPullRequestSnapshot, collectReviewEvidence } from "../../../../github.ts";
+import { getInstallationTokenForRequest, getSelectedRepositoryContextForRequest } from "../../../../github-app.ts";
 import { collectRepositorySnapshot, getGitHubOriginRepository } from "../../../../history.ts";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const PlanRequestSchema = z.object({ baseRef: z.string().trim().min(1).max(100) });
+const PlanRequestSchema = z.union([
+  z.object({ baseRef: z.string().trim().min(1).max(100) }),
+  z.object({ pullRequestNumber: z.number().int().positive().max(999999) }),
+]);
 
 export async function POST(request: NextRequest): Promise<Response> {
   if (githubOAuthConfigured && !(await getServerSession(authOptions))) {
@@ -34,23 +37,30 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!parsed.success) {
     return Response.json({ error: "Enter a valid base branch or commit reference." }, { status: 400 });
   }
-  if (!isValidBaseRef(parsed.data.baseRef)) {
+  if ("baseRef" in parsed.data && !isValidBaseRef(parsed.data.baseRef)) {
     return Response.json({ error: "Enter a valid base branch or commit reference." }, { status: 400 });
   }
 
   try {
     const repositoryPath = process.cwd();
-    const localRepository = getGitHubOriginRepository(repositoryPath);
-    if (!localRepository) {
-      throw new Error("Could not identify the current checkout's GitHub origin. Run RedZone from a GitHub checkout.");
-    }
-    const snapshot = collectRepositorySnapshot(repositoryPath, parsed.data.baseRef);
-    const snapshotFingerprint = createSnapshotFingerprint(snapshot);
-    const selectedRepository = await getSelectedRepositoryForRequest(request);
-    if (localRepository.toLowerCase() !== selectedRepository.toLowerCase()) {
-      throw new Error(`Selected repository ${selectedRepository} does not match the local checkout origin ${localRepository}.`);
-    }
+    const selectedContext = await getSelectedRepositoryContextForRequest(request);
+    const selectedRepository = selectedContext.repository;
     const githubToken = await getInstallationTokenForRequest(request);
+    const pullRequestNumber = "pullRequestNumber" in parsed.data ? parsed.data.pullRequestNumber : undefined;
+    let snapshot;
+    if (pullRequestNumber) {
+      snapshot = await collectPullRequestSnapshot(selectedRepository, pullRequestNumber, githubToken);
+    } else {
+      const localRepository = getGitHubOriginRepository(repositoryPath);
+      if (!localRepository) {
+        throw new Error("Choose a pull request to analyze. Local branch analysis is available only in a Git checkout.");
+      }
+      if (localRepository.toLowerCase() !== selectedRepository.toLowerCase()) {
+        throw new Error(`Selected repository ${selectedRepository} does not match the local checkout origin ${localRepository}.`);
+      }
+      snapshot = collectRepositorySnapshot(repositoryPath, "baseRef" in parsed.data ? parsed.data.baseRef : "main");
+    }
+    const snapshotFingerprint = createSnapshotFingerprint(snapshot);
     const reviewCollection = await collectReviewEvidence(snapshot, githubToken, selectedRepository);
     const plan = snapshot.changedFiles.length > 0
       ? await createAnalysisPlan(snapshot, reviewCollection.evidence, reviewCollection.coverage, repositoryPath, selectedRepository)
@@ -75,6 +85,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       hasChanges: snapshot.changedFiles.length > 0,
       snapshotFingerprint,
       baseRef: snapshot.baseRef,
+      ...(pullRequestNumber ? { pullRequestNumber } : {}),
       headSha: snapshot.headSha,
       changedFiles: snapshot.changedFiles,
       availableAgentIds: plan.availableAgentIds,

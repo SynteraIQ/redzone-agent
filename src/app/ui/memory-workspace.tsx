@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 import type { MemoryRecord, MemoryWorkspaceData } from "../../memory.ts";
 
 type MemoryWorkspaceProps = {
@@ -20,6 +21,7 @@ const tabs: Array<{ id: MemoryTab; label: string; description: string }> = [
 
 function MemoryCard({ memory }: { memory: MemoryRecord }) {
   const scope = Object.entries(memory.scope);
+  const sourceUrl = typeof memory.content.sourceUrl === "string" ? memory.content.sourceUrl : null;
   return (
     <article className="memory-card">
       <div className="memory-card-heading">
@@ -35,6 +37,7 @@ function MemoryCard({ memory }: { memory: MemoryRecord }) {
         <span>Updated {new Date(memory.updatedAt).toLocaleDateString()}</span>
       </div>
       {scope.length > 0 && <div className="memory-scope">{scope.map(([key, value]) => <span key={key}><strong>{key}</strong> {String(value)}</span>)}</div>}
+      {sourceUrl && <a className="memory-source-link" href={sourceUrl} target="_blank" rel="noreferrer">Open source evidence ↗</a>}
     </article>
   );
 }
@@ -44,24 +47,81 @@ export function MemoryWorkspace({ repository, databaseConfigured }: MemoryWorksp
   const [data, setData] = useState<MemoryWorkspaceData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  async function reloadMemory() {
+    const response = await fetch("/api/memory", { cache: "no-store" });
+    const payload = await response.json() as MemoryWorkspaceData & { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? "Could not load repository memory.");
+    setData(payload);
+    setError(null);
+  }
 
   useEffect(() => {
     if (!databaseConfigured || repository === "Select a repository") return;
     let cancelled = false;
     setLoading(true);
-    fetch("/api/memory", { cache: "no-store" })
-      .then(async (response) => {
-        const payload = await response.json() as MemoryWorkspaceData & { error?: string };
-        if (!response.ok) throw new Error(payload.error ?? "Could not load repository memory.");
-        return payload;
-      })
-      .then((payload) => { if (!cancelled) { setData(payload); setError(null); } })
+    reloadMemory()
+      .then(() => { if (!cancelled) setError(null); })
       .catch((caught: unknown) => {
         if (!cancelled) setError(caught instanceof Error ? caught.message : "Could not load repository memory.");
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [databaseConfigured, repository]);
+
+  async function submitCandidate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    setSaving(true);
+    setActionError(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/memory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: formData.get("kind"),
+          title: formData.get("title"),
+          summary: formData.get("summary"),
+          sourceUrl: formData.get("sourceUrl"),
+        }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Could not save this memory candidate.");
+      form.reset();
+      await reloadMemory();
+      setNotice("Candidate saved with its source evidence. Review it before activating.");
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "Could not save this memory candidate.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function decideCandidate(id: string, decision: "approve" | "archive") {
+    setSaving(true);
+    setActionError(null);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/memory", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, decision }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Could not update this memory.");
+      await reloadMemory();
+      setNotice(decision === "approve" ? "Memory approved and will be available to future analyses." : "Candidate archived.");
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "Could not update this memory.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   const visibleMemories = useMemo(() => {
     if (!data) return [];
@@ -77,13 +137,24 @@ export function MemoryWorkspace({ repository, databaseConfigured }: MemoryWorksp
       </div>
       <p className="memory-description">{tabs.find((item) => item.id === tab)?.description}</p>
 
+      {databaseConfigured && repository !== "Select a repository" && <form className="memory-capture-form" onSubmit={submitCandidate}>
+        <div><span className="section-kicker">CAPTURE REPOSITORY LEARNING</span><h2>Propose a memory</h2><p>Record a reusable pattern or instruction with a GitHub source. It stays a candidate until a human approves it.</p></div>
+        <label>Memory type<select name="kind" defaultValue="semantic"><option value="semantic">Learned pattern</option><option value="procedural">Review instruction</option></select></label>
+        <label>Title<input name="title" required minLength={3} maxLength={240} placeholder="e.g. Keep workflow retries idempotent" /></label>
+        <label>Learning<textarea name="summary" required minLength={10} maxLength={2000} rows={3} placeholder="What should future analyses remember, and when does it apply?" /></label>
+        <label>GitHub evidence URL<input name="sourceUrl" required type="url" placeholder={`https://github.com/${repository}/pull/123`} /></label>
+        <button className="plan-button" type="submit" disabled={saving}>{saving ? "Saving…" : "Save candidate"}</button>
+      </form>}
+      {actionError && <div className="memory-error" role="alert">{actionError}</div>}
+      {notice && <div className="memory-notice" role="status">{notice}</div>}
+
       {!databaseConfigured ? <div className="memory-empty"><h2>PostgreSQL is not configured</h2><p>Add <code>DATABASE_URL</code> to the server environment, then apply the reviewed Drizzle migration to enable persistent memory.</p></div>
         : repository === "Select a repository" ? <div className="memory-empty"><h2>Choose a repository</h2><p>Memory is scoped to the connected GitHub App installation and selected repository.</p><a href="/repositories">Open Repositories <span>→</span></a></div>
           : loading ? <div className="memory-empty memory-empty-compact"><span className="spinner" /> Loading repository memory…</div>
             : error ? <div className="memory-error" role="alert">{error}</div>
               : tab === "evidence" ? <div className="memory-event-list">{data?.events.length ? data.events.map((event) => <article className="memory-event" key={event.id}><div><strong>{event.eventType.replaceAll("-", " ")}</strong><span>{event.sourceType} · {event.sourceId}</span></div><time>{new Date(event.occurredAt).toLocaleDateString()}</time>{event.sourceUrl && <a href={event.sourceUrl} target="_blank" rel="noreferrer">Open evidence ↗</a>}</article>) : <div className="memory-empty"><h2>No learning events yet</h2><p>Source events will appear here as RedZone begins capturing review decisions and outcomes.</p></div>}</div>
                 : tab === "applied" ? <div className="memory-event-list">{data?.applications.length ? data.applications.map((application) => <article className="memory-event memory-application" key={application.id}><div><strong>Analysis {application.analysisId}</strong><span>{application.memories.length} memories used · {application.resultSummary ?? "No result summary recorded"}</span>{application.memories.map((memory) => <small key={memory.memoryId}>{memory.title}: {memory.reason}</small>)}</div><time>{new Date(application.appliedAt).toLocaleDateString()}</time></article>) : <div className="memory-empty"><h2>No memory applied yet</h2><p>When an analysis retrieves durable memory, its references and rationale will appear here.</p></div>}</div>
-                  : visibleMemories.length ? <div className="memory-list">{visibleMemories.map((memory) => <MemoryCard key={memory.id} memory={memory} />)}</div>
+                    : visibleMemories.length ? <div className="memory-list">{visibleMemories.map((memory) => <div key={memory.id}><MemoryCard memory={memory} />{memory.status === "candidate" && <div className="memory-candidate-actions"><span>Human review required</span><button type="button" disabled={saving} onClick={() => decideCandidate(memory.id, "approve")}>Approve</button><button type="button" disabled={saving} onClick={() => decideCandidate(memory.id, "archive")}>Archive</button></div>}</div>)}</div>
                     : <div className="memory-empty"><h2>{tab === "patterns" ? "No learned patterns yet" : tab === "instructions" ? "No instructions yet" : "No saved memory yet"}</h2><p>RedZone currently builds review context on demand. Persistent memory will appear here once learning events are captured and reviewed.</p></div>}
     </section>
   );

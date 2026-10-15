@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import type { RepositorySnapshot } from "./history.ts";
+import type { CommitEvidence, RepositorySnapshot } from "./history.ts";
 
 export type ReviewEvidence = {
   id: string;
@@ -64,6 +64,28 @@ export type OpenPullRequest = {
   draft: boolean;
   labels: string[];
 };
+
+export type RecentPullRequest = Pick<OpenPullRequest, "number" | "title" | "url" | "author" | "createdAt" | "updatedAt" | "draft" | "labels">;
+
+type RemotePullRequest = {
+  number: number;
+  title: string;
+  html_url: string;
+  user?: { login?: string };
+  created_at: string;
+  updated_at?: string;
+  draft?: boolean;
+  labels?: Array<{ name?: string }>;
+  base: { ref: string; sha: string };
+  head: { ref: string; sha: string };
+};
+
+type RemotePullRequestFile = { filename: string; status: string; patch?: string };
+type RemoteCommit = {
+  sha: string;
+  commit: { message: string; author?: { date?: string } };
+};
+type RemoteFileContents = { content?: string; encoding?: string };
 
 type PullRequestFile = { filename: string };
 type GitHubComment = {
@@ -482,6 +504,28 @@ export async function collectExpertMap(
   };
 }
 
+export async function collectRemoteCodeowners(
+  repository: string,
+  token: string,
+): Promise<{ file: string; contents: string } | null> {
+  const normalizedRepository = configuredRepository(repository);
+  if (!normalizedRepository) throw new Error("Choose a repository before loading CODEOWNERS.");
+  const locations = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
+  for (const location of locations) {
+    try {
+      const response = await githubJson<RemoteFileContents>(
+        `repos/${normalizedRepository}/contents/${location}`,
+        token,
+      );
+      if (response.encoding !== "base64" || !response.content) continue;
+      return { file: location, contents: Buffer.from(response.content.replace(/\s/g, ""), "base64").toString("utf8") };
+    } catch {
+      // Try the next standard CODEOWNERS location; a repository may not define one.
+    }
+  }
+  return null;
+}
+
 export async function collectOpenPullRequests(
   repository: string,
   token: string,
@@ -537,4 +581,114 @@ export async function collectOpenPullRequests(
     durationMs: Date.now() - scanStartedAt,
   });
   return pullRequests;
+}
+
+export async function listRecentPullRequests(
+  repository: string,
+  token: string,
+  limit = 50,
+): Promise<RecentPullRequest[]> {
+  const normalizedRepository = configuredRepository(repository);
+  if (!normalizedRepository) throw new Error("Choose a repository before loading pull requests.");
+  const records = await githubJson<PullRequestRecord[]>(
+    `repos/${normalizedRepository}/pulls?state=open&sort=updated&direction=desc&per_page=${Math.min(Math.max(limit, 1), 100)}`,
+    token,
+  );
+  return records.map((record) => ({
+    number: record.number,
+    title: record.title,
+    url: record.html_url,
+    author: record.user?.login ?? "unknown",
+    createdAt: record.created_at,
+    updatedAt: record.updated_at ?? record.created_at,
+    draft: record.draft ?? false,
+    labels: (record.labels ?? []).flatMap((label) => label.name ? [label.name] : []),
+  }));
+}
+
+export async function collectPullRequestSnapshot(
+  repository: string,
+  pullRequestNumber: number,
+  token: string,
+): Promise<RepositorySnapshot> {
+  const normalizedRepository = configuredRepository(repository);
+  if (!normalizedRepository) throw new Error("Choose a repository before analyzing a pull request.");
+  const pullRequest = await githubJson<RemotePullRequest>(
+    `repos/${normalizedRepository}/pulls/${pullRequestNumber}`,
+    token,
+  );
+  if (pullRequest.number !== pullRequestNumber) throw new Error("GitHub returned a different pull request than requested.");
+
+  const files = await githubPaginated<RemotePullRequestFile>(
+    `repos/${normalizedRepository}/pulls/${pullRequestNumber}/files?per_page=100`,
+    token,
+  );
+  const changedFiles = [...new Set(files.map((file) => file.filename))];
+  const historyFiles = changedFiles.slice(0, 15);
+  const historyResults = await Promise.all(historyFiles.map(async (filePath) => {
+    const endpoint = `repos/${normalizedRepository}/commits?path=${encodeURIComponent(filePath)}&sha=${pullRequest.base.sha}&per_page=10`;
+    try {
+      const commits = await githubJson<RemoteCommit[]>(endpoint, token);
+      return {
+        successful: true,
+        commits: commits.map((commit): CommitEvidence => ({
+          hash: commit.sha,
+          date: commit.commit.author?.date?.slice(0, 10) ?? "unknown date",
+          subject: commit.commit.message.split("\n", 1)[0] ?? "(no commit message)",
+          files: [filePath],
+        })),
+      };
+    } catch (error) {
+      console.warn("[redzone:analysis] Could not collect path history for PR snapshot", {
+        repository: normalizedRepository,
+        filePath,
+        message: error instanceof Error ? error.message : "Unknown GitHub API error",
+      });
+      return { successful: false, commits: [] as CommitEvidence[] };
+    }
+  }));
+  const uniqueHistory = new Map<string, CommitEvidence>();
+  for (const commit of historyResults.flatMap((result) => result.commits)) {
+    const existing = uniqueHistory.get(commit.hash);
+    if (existing) existing.files = [...new Set([...existing.files, ...commit.files])];
+    else uniqueHistory.set(commit.hash, commit);
+  }
+  const history = [...uniqueHistory.values()]
+    .sort((left, right) => right.date.localeCompare(left.date))
+    .slice(0, 100);
+  const historyCoverage = {
+    pathsSearched: historyResults.filter((result) => result.successful).length,
+    pathsTotal: changedFiles.length,
+    pathsFailed: historyResults.filter((result) => !result.successful).length,
+    commitsPerPath: 10,
+    mayHaveMore: changedFiles.length > historyFiles.length || historyResults.some((result) => result.commits.length >= 10) || historyResults.some((result) => !result.successful),
+  };
+  const maxDiffCharacters = 150_000;
+  const patches = files.flatMap((file) => file.patch
+    ? [`diff --git a/${file.filename} b/${file.filename}\n${file.patch}`]
+    : []);
+  const fullDiff = patches.join("\n");
+  const limitations = files.some((file) => !file.patch)
+    ? [`GitHub omitted patches for ${files.filter((file) => !file.patch).length} changed file(s), often because of file size or binary content.`]
+    : [];
+  if (fullDiff.length > maxDiffCharacters) limitations.push(`The pull request diff was truncated at ${maxDiffCharacters} characters.`);
+  const diff = fullDiff.length > maxDiffCharacters
+    ? `${fullDiff.slice(0, maxDiffCharacters)}\n\n[Diff truncated at ${maxDiffCharacters} characters.]`
+    : fullDiff;
+
+  return {
+    source: "github-pull-request",
+    pullRequestNumber,
+    limitations,
+    baseRef: pullRequest.base.ref,
+    headRef: `refs/pull/${pullRequestNumber}/head`,
+    headSha: pullRequest.head.sha,
+    baseSha: pullRequest.base.sha,
+    mergeBaseSha: pullRequest.base.sha,
+    changedFiles,
+    workingTreeFiles: [],
+    diff,
+    history,
+    historyCoverage,
+  };
 }

@@ -7,7 +7,6 @@ import {
   isGitHubAppConfigured,
   readSelectedRepositoryCookie,
 } from "../../../github-app.ts";
-import { getGitHubOriginRepository } from "../../../history.ts";
 
 export const runtime = "nodejs";
 
@@ -26,29 +25,15 @@ export async function GET(request: NextRequest): Promise<Response> {
       subject,
       installationId,
     );
-    const repositoryPath = process.cwd();
-    const localRepository = getGitHubOriginRepository(repositoryPath);
-    const matchingRepository = repositories.find((repository) => repository.full_name.toLowerCase() === localRepository?.toLowerCase());
-    const selectedRepository = matchingRepository?.full_name ?? null;
+    const selectedRepository = repositories.find(
+      (repository) => repository.full_name.toLowerCase() === configuredSelection?.toLowerCase(),
+    )?.full_name ?? null;
     const response = NextResponse.json({
       repositories,
       selectedRepository,
-      localRepository,
     });
     response.headers.set("Cache-Control", "private, no-store");
-    if (selectedRepository && configuredSelection !== selectedRepository) {
-      response.cookies.set(
-        GITHUB_REPOSITORY_COOKIE,
-        createSelectedRepositoryCookie(selectedRepository, subject, installationId),
-        {
-          httpOnly: true,
-          sameSite: "lax",
-          secure: request.nextUrl.protocol === "https:",
-          path: "/",
-          maxAge: 60 * 60 * 24 * 30,
-        },
-      );
-    } else if (!selectedRepository && configuredSelection) {
+    if (!selectedRepository && configuredSelection) {
       response.cookies.delete(GITHUB_REPOSITORY_COOKIE);
     }
     return response;
@@ -77,15 +62,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     const selected = repositories.find((repository) => repository.full_name === parsed.data.repository);
     if (!selected) {
       return Response.json({ error: "That repository is not available to the connected GitHub App." }, { status: 403 });
-    }
-    const repositoryPath = process.cwd();
-    const localRepository = getGitHubOriginRepository(repositoryPath);
-    if (!localRepository || localRepository.toLowerCase() !== selected.full_name.toLowerCase()) {
-      return Response.json({
-        error: localRepository
-          ? `The configured local checkout is ${localRepository}. Select it, or configure a local checkout for ${selected.full_name}.`
-          : "Run RedZone from a GitHub checkout before selecting a repository.",
-      }, { status: 409 });
     }
     const response = NextResponse.json({ selectedRepository: selected.full_name });
     response.cookies.set(
