@@ -91,7 +91,7 @@ function ownersForPath(filePath: string, rules: CodeOwnerRule[]): string[] {
 
 function readCodeowners(repositoryPath: string): { file: string | null; rules: CodeOwnerRule[] } {
   for (const location of codeownersLocations) {
-    const filePath = path.join(repositoryPath, location);
+    const filePath = path.join(/*turbopackIgnore: true*/ repositoryPath, location);
     if (!existsSync(filePath)) continue;
     try {
       return { file: location, rules: parseCodeowners(readFileSync(filePath, "utf8")) };
