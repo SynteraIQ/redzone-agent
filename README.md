@@ -67,6 +67,12 @@ The dashboard shows each specialist’s status and a short finding. It does not 
 
 The **Expert map** page scans up to `REDZONE_EXPERT_MAP_PR_LIMIT` recently updated pull requests (default 30, maximum 100) on demand. It maps review activity and formal decisions to changed paths, applies the local checkout's CODEOWNERS rules, and links to the source reviews. Results are not persisted. Review activity is historical evidence; the map does not claim a person's current role or availability.
 
+## Memory persistence
+
+The Memory page uses PostgreSQL for repository-scoped learning events, semantic patterns, procedural instructions, evidence links, and records of which memories were used in an analysis. Set `DATABASE_URL` in the server environment to enable it. Memory reads are scoped to the selected repository and its GitHub App installation. The application does not create tables automatically at startup.
+
+Generate schema changes with `npm run db:generate`. After configuring a PostgreSQL provider and reviewing the generated migration, apply it explicitly with `npm run db:migrate`. Vercel connects to PostgreSQL through Marketplace providers such as Neon or Supabase; credentials are supplied as environment variables.
+
 To run from the terminal, use `npm run analyze -- main`. Add `--json` to print the structured analysis and its evidence.
 
 ## Current limits
