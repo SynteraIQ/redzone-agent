@@ -6,10 +6,12 @@ import type { AnalysisProgressEvent, AnalysisUIMessage } from "../../../analysis
 import { analyzeSnapshot } from "../../../agent.ts";
 import { AnalysisRunRequestSchema, createSnapshotFingerprint, isValidBaseRef } from "../../../analysis-plan.ts";
 import { authOptions, githubOAuthConfigured } from "../../../auth.ts";
-import { collectReviewEvidence } from "../../../github.ts";
-import { getInstallationTokenForRequest, getSelectedRepositoryForRequest } from "../../../github-app.ts";
+import { collectPullRequestSnapshot, collectReviewEvidence } from "../../../github.ts";
+import { getInstallationTokenForRequest, getSelectedRepositoryContextForRequest } from "../../../github-app.ts";
 import { collectRepositorySnapshot, getGitHubOriginRepository } from "../../../history.ts";
 import { formatAnalysisReport } from "../../../report.ts";
+import { isMemoryDatabaseConfigured } from "../../../db/index.ts";
+import { loadActiveMemories, recordMemoryApplication } from "../../../memory-store.ts";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -33,10 +35,11 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!parsedRequest.success) {
     return Response.json({ error: "Enter a valid base branch or commit reference." }, { status: 400 });
   }
-  if (!isValidBaseRef(parsedRequest.data.baseRef)) {
+  if ("baseRef" in parsedRequest.data && !isValidBaseRef(parsedRequest.data.baseRef)) {
     return Response.json({ error: "Enter a valid base branch or commit reference." }, { status: 400 });
   }
-  const { baseRef } = parsedRequest.data;
+  const baseRef = "baseRef" in parsedRequest.data ? parsedRequest.data.baseRef : undefined;
+  const pullRequestNumber = "pullRequestNumber" in parsedRequest.data ? parsedRequest.data.pullRequestNumber : undefined;
   const snapshotFingerprint = "snapshotFingerprint" in parsedRequest.data
     ? parsedRequest.data.snapshotFingerprint
     : undefined;
@@ -58,12 +61,20 @@ export async function POST(request: NextRequest): Promise<Response> {
       };
       const repositoryPath = process.cwd();
       try {
-        const localRepository = getGitHubOriginRepository(repositoryPath);
-        if (!localRepository) {
-          throw new Error("Could not identify the current checkout's GitHub origin. Run RedZone from a GitHub checkout.");
-        }
         await publishProgress({ stage: "snapshot", status: "running", label: "Capturing repository changes" });
-        const snapshot = collectRepositorySnapshot(repositoryPath, baseRef);
+        const selectedContext = await getSelectedRepositoryContextForRequest(request);
+        const selectedRepository = selectedContext.repository;
+        const githubToken = await getInstallationTokenForRequest(request);
+        const localRepository = pullRequestNumber ? undefined : getGitHubOriginRepository(repositoryPath);
+        if (!pullRequestNumber && !localRepository) {
+          throw new Error("Choose a pull request to analyze. Local branch analysis is available only in a Git checkout.");
+        }
+        if (localRepository && localRepository.toLowerCase() !== selectedRepository.toLowerCase()) {
+          throw new Error(`Selected repository ${selectedRepository} does not match the local checkout origin ${localRepository}.`);
+        }
+        const snapshot = pullRequestNumber
+          ? await collectPullRequestSnapshot(selectedRepository, pullRequestNumber, githubToken)
+          : collectRepositorySnapshot(repositoryPath, baseRef ?? "main");
         if (snapshotFingerprint && createSnapshotFingerprint(snapshot) !== snapshotFingerprint) {
           throw new Error("Repository changes since the plan was created. Create a new plan before running analysis.");
         }
@@ -78,11 +89,6 @@ export async function POST(request: NextRequest): Promise<Response> {
         }
 
         await publishProgress({ stage: "reviews", status: "running", label: "Collecting prior review evidence" });
-        const selectedRepository = await getSelectedRepositoryForRequest(request);
-        if (localRepository.toLowerCase() !== selectedRepository.toLowerCase()) {
-          throw new Error(`Selected repository ${selectedRepository} does not match the local checkout origin ${localRepository}.`);
-        }
-        const githubToken = await getInstallationTokenForRequest(request);
         const reviewCollection = await collectReviewEvidence(snapshot, githubToken, selectedRepository);
         await publishProgress({
           stage: "reviews",
@@ -90,6 +96,17 @@ export async function POST(request: NextRequest): Promise<Response> {
           label: "Prior review evidence",
           detail: `Collected ${reviewCollection.evidence.length} review records.`,
         });
+        let activeMemories = [] as Awaited<ReturnType<typeof loadActiveMemories>>;
+        if (isMemoryDatabaseConfigured()) {
+          try {
+            activeMemories = await loadActiveMemories(String(selectedContext.installationId), selectedRepository);
+          } catch (error) {
+            console.error("[redzone:memory] Memory retrieval failed; continuing without memory", {
+              repository: selectedRepository,
+              message: error instanceof Error ? error.message : "Unknown memory retrieval error",
+            });
+          }
+        }
         const analysis = await analyzeSnapshot(
           snapshot,
           reviewCollection.evidence,
@@ -98,7 +115,25 @@ export async function POST(request: NextRequest): Promise<Response> {
           publishProgress,
           approvedAgentIds,
           selectedRepository,
+          activeMemories,
         );
+        if (activeMemories.length > 0) {
+          try {
+            await recordMemoryApplication({
+              tenantId: String(selectedContext.installationId),
+              repository: selectedRepository,
+              analysisId: messageId,
+              resultSummary: analysis.summary,
+              memories: activeMemories,
+            });
+          } catch (error) {
+            console.error("[redzone:memory] Could not record memory application", {
+              repository: selectedRepository,
+              analysisId: messageId,
+              message: error instanceof Error ? error.message : "Unknown memory application error",
+            });
+          }
+        }
         const report = formatAnalysisReport({
           repositoryPath,
           repository: selectedRepository,
@@ -106,6 +141,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           analysis,
           reviewEvidence: reviewCollection.evidence,
           sourceCoverage: reviewCollection.coverage,
+          appliedMemories: activeMemories,
         });
         await publishProgress({ stage: "analysis", status: "completed", label: "Analysis complete" });
         writer.write({ type: "text-start", id: `${messageId}-report` });

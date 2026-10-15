@@ -15,7 +15,6 @@ type RepositoryItem = {
 type RepositoryResponse = {
   repositories?: RepositoryItem[];
   selectedRepository?: string | null;
-  localRepository?: string | null;
   error?: string;
 };
 
@@ -29,7 +28,6 @@ export function RepositoriesWorkspace({ connected, configured, initialSelection 
   const router = useRouter();
   const [repositories, setRepositories] = useState<RepositoryItem[]>([]);
   const [selectedRepository, setSelectedRepository] = useState(initialSelection);
-  const [localRepository, setLocalRepository] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
@@ -46,7 +44,6 @@ export function RepositoriesWorkspace({ connected, configured, initialSelection 
         if (active) {
           setRepositories(result.repositories ?? []);
           setSelectedRepository(result.selectedRepository ?? null);
-          setLocalRepository(result.localRepository ?? null);
         }
       })
       .catch((caught: unknown) => {
@@ -63,10 +60,6 @@ export function RepositoriesWorkspace({ connected, configured, initialSelection 
     if (!query) return repositories;
     return repositories.filter((repository) => repository.full_name.toLowerCase().includes(query));
   }, [repositories, search]);
-  const localRepositoryInstalled = repositories.some(
-    (repository) => repository.full_name.toLowerCase() === localRepository?.toLowerCase(),
-  );
-
   async function selectRepository(repository: RepositoryItem) {
     setSaving(repository.full_name);
     setError(null);
@@ -99,9 +92,7 @@ export function RepositoriesWorkspace({ connected, configured, initialSelection 
             <div><span className="section-kicker">GITHUB APP INSTALLATION</span><h2>Choose a repository</h2></div>
             <label className="repository-search"><span>FILTER</span><input aria-label="Filter repositories" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="owner/repository" /></label>
           </div>
-          <p className="repository-help">Select the repository whose pull request history RedZone should use as evidence. It must match the GitHub origin of the local checkout configured for analysis.</p>
-          {!localRepository && <div className="plan-error" role="status">RedZone could not identify the current checkout’s GitHub origin. Run RedZone from a GitHub checkout.</div>}
-          {localRepository && !localRepositoryInstalled && <div className="plan-error" role="status">The GitHub App can’t access {localRepository}. Install it on that repository, then reload this page.</div>}
+          <p className="repository-help">Select a repository RedZone can access through the GitHub App. The selection is saved to your account and used for analysis.</p>
           {error && <div className="plan-error" role="alert">{error}</div>}
           {loading ? <div className="repository-empty">Loading repositories…</div> : filteredRepositories.length === 0 ? (
             <div className="repository-empty">{repositories.length === 0 ? "No repositories are available to this GitHub App installation." : "No repositories match your filter."}</div>
@@ -109,16 +100,15 @@ export function RepositoriesWorkspace({ connected, configured, initialSelection 
             <div className="repository-list">
               {filteredRepositories.map((repository) => {
                 const selected = selectedRepository === repository.full_name;
-                const matchesLocalCheckout = localRepository?.toLowerCase() === repository.full_name.toLowerCase();
                 return (
                   <article className={`repository-row${selected ? " repository-row-selected" : ""}`} key={repository.id}>
                     <div className="repository-row-icon">GH</div>
                     <div className="repository-row-info">
                       <strong>{repository.full_name}</strong>
-                      <span>{repository.private ? "Private" : "Public"}{repository.default_branch ? ` · Default branch ${repository.default_branch}` : ""}{!matchesLocalCheckout ? " · Local checkout required" : ""}</span>
+                      <span>{repository.private ? "Private" : "Public"}{repository.default_branch ? ` · Default branch ${repository.default_branch}` : ""}</span>
                     </div>
-                    <button className={selected ? "repository-selected-button" : "repository-select-button"} type="button" disabled={!matchesLocalCheckout || selected || saving !== null} onClick={() => selectRepository(repository)}>
-                      {saving === repository.full_name ? "Saving…" : selected ? "Selected" : matchesLocalCheckout ? "Select" : "Unavailable"}
+                    <button className={selected ? "repository-selected-button" : "repository-select-button"} type="button" disabled={selected || saving !== null} onClick={() => selectRepository(repository)}>
+                      {saving === repository.full_name ? "Saving…" : selected ? "Selected" : "Select"}
                     </button>
                   </article>
                 );

@@ -95,7 +95,7 @@ export function ExpertMapWorkspace({ repository, connected, configured }: Expert
     return <div className="expert-map-empty"><h2>Connect GitHub to continue</h2><p>Install the RedZone GitHub App on the repository to build its expert map.</p><a className="plan-button" href="/api/github/install">Connect GitHub App <span>↗</span></a></div>;
   }
   if (repository === "Select a repository") {
-    return <div className="expert-map-empty"><h2>Select a repository</h2><p>Choose the repository matching the current local checkout before building its expert map.</p><a className="plan-button" href="/repositories">Open Repositories <span>↗</span></a></div>;
+    return <div className="expert-map-empty"><h2>Select a repository</h2><p>Choose a repository available to the GitHub App before building its expert map.</p><a className="plan-button" href="/repositories">Open Repositories <span>↗</span></a></div>;
   }
 
   return (
@@ -119,7 +119,7 @@ export function ExpertMapWorkspace({ repository, connected, configured }: Expert
             <span><strong>{expertMap.ownershipRules.length}</strong> CODEOWNERS rules</span>
           </div>
           {expertMap.mayHaveMorePullRequests && <p className="expert-map-note">The scan reached its configured limit of {expertMap.pullRequestLimit} PRs; older review history may be missing.</p>}
-          {!expertMap.codeownersFile && <p className="expert-map-note">No CODEOWNERS file was found in the local checkout. Review history can still suggest prior reviewers, but code ownership is not configured here.</p>}
+          {!expertMap.codeownersFile && <p className="expert-map-note">No CODEOWNERS file was found in the selected GitHub repository. Review history can still suggest prior reviewers.</p>}
           {expertMap.codeownersFile && <p className="expert-map-note">Ownership rules read from <code>{expertMap.codeownersFile}</code>. GitHub membership and current availability are not inferred from review history.</p>}
           <label className="expert-map-search"><span>FILTER PATH OR CONTRIBUTOR</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="src/ or username" /></label>
           <div className="expert-map-areas">

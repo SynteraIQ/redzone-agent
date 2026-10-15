@@ -11,6 +11,7 @@ import {
 } from "./planning.ts";
 import { runSpecialists } from "./specialists.ts";
 import { synthesizeAnalysis } from "./synthesis.ts";
+import type { AppliedMemory } from "../../memory-store.ts";
 
 export async function analyzeSnapshot(
   snapshot: RepositorySnapshot,
@@ -20,9 +21,10 @@ export async function analyzeSnapshot(
   onProgress?: (event: AnalysisProgressEvent) => void | Promise<void>,
   approvedAgentIds?: SpecialistAgentId[],
   githubRepository?: string,
+  activeMemories: AppliedMemory[] = [],
 ): Promise<RedZoneAnalysis> {
   const reportProgress = async (event: AnalysisProgressEvent) => await onProgress?.(event);
-  const context = await prepareAnalysisContext(snapshot, reviewEvidence, repositoryPath, reportProgress, githubRepository);
+  const context = await prepareAnalysisContext(snapshot, reviewEvidence, repositoryPath, reportProgress, githubRepository, activeMemories);
   await reportProgress({
     stage: "planning",
     status: "running",

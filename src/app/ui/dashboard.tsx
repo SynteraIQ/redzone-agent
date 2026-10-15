@@ -21,6 +21,8 @@ type DashboardProps = {
   githubAppConnected: boolean;
 };
 
+type PullRequestOption = { number: number; title: string; author: string; updatedAt: string; draft: boolean };
+
 const githubAppStatusMessages: Record<string, string> = {
   connected: "GitHub App connected. Choose a repository from the Repositories menu to use its pull request history.",
   "sign-in-required": "Sign in with the GitHub App, then connect it to the repository.",
@@ -52,6 +54,9 @@ export function Dashboard({
   githubAppConnected,
 }: DashboardProps) {
   const [baseRef, setBaseRef] = useState(initialBaseRef);
+  const [pullRequestNumber, setPullRequestNumber] = useState("");
+  const [pullRequests, setPullRequests] = useState<PullRequestOption[]>([]);
+  const [pullRequestLoadError, setPullRequestLoadError] = useState<string | null>(null);
   const [plan, setPlan] = useState<AnalysisPlanPreview | null>(null);
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
@@ -72,17 +77,35 @@ export function Dashboard({
     window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
   }, []);
 
+  useEffect(() => {
+    if (!repositorySelected) return;
+    let cancelled = false;
+    fetch("/api/pull-requests", { cache: "no-store" })
+      .then(async (response) => {
+        const result = await response.json() as { pullRequests?: PullRequestOption[]; error?: string };
+        if (!response.ok) throw new Error(result.error ?? "Could not load pull requests.");
+        if (!cancelled) setPullRequests(result.pullRequests ?? []);
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) setPullRequestLoadError(caught instanceof Error ? caught.message : "Could not load pull requests.");
+      });
+    return () => { cancelled = true; };
+  }, [repositorySelected, repository]);
+
   async function runAnalysis(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!baseRef.trim()) return;
-    await sendMessage({ text: `Analyze the current change against ${baseRef.trim()}` }, {
+    if (!pullRequestNumber && !baseRef.trim()) return;
+    const target = pullRequestNumber
+      ? { pullRequestNumber: Number(pullRequestNumber) }
+      : { baseRef: baseRef.trim() };
+    await sendMessage({ text: pullRequestNumber ? `Analyze pull request #${pullRequestNumber}` : `Analyze the current change against ${baseRef.trim()}` }, {
       body: plan?.hasChanges
         ? {
-            baseRef: plan.baseRef,
+            ...(plan.pullRequestNumber ? { pullRequestNumber: plan.pullRequestNumber } : { baseRef: plan.baseRef }),
             snapshotFingerprint: plan.snapshotFingerprint,
             approvedAgentIds: plan.selectedAgentIds,
           }
-        : { baseRef: baseRef.trim() },
+        : target,
     });
   }
 
@@ -94,7 +117,7 @@ export function Dashboard({
       const response = await fetch("/api/analyze/plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ baseRef: baseRef.trim() }),
+        body: JSON.stringify(pullRequestNumber ? { pullRequestNumber: Number(pullRequestNumber) } : { baseRef: baseRef.trim() }),
       });
       const result = await response.json() as AnalysisPlanPreview & { error?: string };
       if (!response.ok) throw new Error(result.error ?? "Could not create an analysis plan.");
@@ -142,23 +165,25 @@ export function Dashboard({
             <div>
               <div className="eyebrow"><span className="eyebrow-line" /> HISTORICAL CODE RISK</div>
               <h1>Catch the change<br />that looks familiar.</h1>
-              <p className="intro-copy">Red Zone maps TypeScript dependencies and checks whether earlier reviews or rollbacks touched related code.</p>
+              <p className="intro-copy">Red Zone checks changes against review history, rollback signals, and human-approved repository memory.</p>
             </div>
             <div className="intro-mark" aria-hidden="true"><span>R</span><i /><i /><i /></div>
           </div>
 
           <form className="analysis-card" onSubmit={runAnalysis}>
-            <div className="card-topline"><div><span className="card-icon">⌘</span><strong>Analyze current change</strong></div><span className="local-badge"><i /> {!repositorySelected ? "SELECT REPOSITORY" : authConfigured && !signedIn ? "SIGN IN REQUIRED" : "READY TO RUN"}</span></div>
-            <p>Run the analysis directly, or plan first to inspect the evidence and choose which specialist checks to run. Direct runs let the planner select eligible checks automatically.</p>
+            <div className="card-topline"><div><span className="card-icon">⌘</span><strong>{pullRequestNumber ? `Analyze PR #${pullRequestNumber}` : "Analyze current change"}</strong></div><span className="local-badge"><i /> {!repositorySelected ? "SELECT REPOSITORY" : authConfigured && !signedIn ? "SIGN IN REQUIRED" : "READY TO RUN"}</span></div>
+            <p>Select an open pull request for hosted analysis, or leave it blank to analyze the current local checkout. Plan first to inspect evidence and choose specialist checks.</p>
             <div className="analysis-controls">
-              <label className="branch-field"><span>BASE BRANCH</span><div><span className="branch-glyph">⑂</span><input aria-label="Base branch" value={baseRef} onChange={(event) => { setBaseRef(event.target.value); setPlan(null); setPlanError(null); }} placeholder="main" /></div></label>
-              <button className="plan-button" type="button" onClick={createPlan} disabled={busy || planning || (authConfigured && !signedIn) || !repositorySelected || !baseRef.trim()}>
+              <label className="branch-field"><span>OPEN PULL REQUEST</span><div><span className="branch-glyph">#</span><select aria-label="Open pull request" value={pullRequestNumber} onChange={(event) => { setPullRequestNumber(event.target.value); setPlan(null); setPlanError(null); }}><option value="">Select a pull request</option>{pullRequests.map((pullRequest) => <option key={pullRequest.number} value={pullRequest.number}>#{pullRequest.number} · {pullRequest.title.slice(0, 70)}{pullRequest.draft ? " · Draft" : ""}</option>)}</select></div></label>
+              <label className="branch-field"><span>BASE BRANCH · LOCAL ONLY</span><div><span className="branch-glyph">⑂</span><input aria-label="Base branch" value={baseRef} onChange={(event) => { setBaseRef(event.target.value); setPullRequestNumber(""); setPlan(null); setPlanError(null); }} placeholder="main" /></div></label>
+              <button className="plan-button" type="button" onClick={createPlan} disabled={busy || planning || (authConfigured && !signedIn) || !repositorySelected || (!pullRequestNumber && !baseRef.trim())}>
                 {planning ? <><span className="spinner" /> Planning</> : <>Plan review <span>↗</span></>}
               </button>
-              <button className="run-button" type="submit" disabled={busy || planning || (authConfigured && !signedIn) || !repositorySelected || !baseRef.trim() || (plan !== null && !plan.hasChanges) || (plan?.hasChanges === true && plan.selectedAgentIds.length === 0)}>
+              <button className="run-button" type="submit" disabled={busy || planning || (authConfigured && !signedIn) || !repositorySelected || (!pullRequestNumber && !baseRef.trim()) || (plan !== null && !plan.hasChanges) || (plan?.hasChanges === true && plan.selectedAgentIds.length === 0)}>
                 {busy ? <><span className="spinner" /> Running</> : plan?.hasChanges ? <>Run approved plan <span>↗</span></> : <>Run analysis <span>↗</span></>}
               </button>
             </div>
+            {pullRequestLoadError && <div className="plan-error" role="alert">{pullRequestLoadError}</div>}
             {!repositorySelected && <div className="auth-note">Choose a GitHub repository before planning the review. <a href="/repositories">Open Repositories <span>→</span></a></div>}
             {authConfigured && !signedIn && <div className="auth-note">Sign in with GitHub to run an analysis. <a href="/login">Continue with GitHub <span>→</span></a></div>}
             {!authConfigured && <div className="helper-note">Local developer mode · Configure GitHub App sign-in before production deployment.</div>}

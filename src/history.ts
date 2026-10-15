@@ -8,6 +8,9 @@ export type CommitEvidence = {
 };
 
 export type RepositorySnapshot = {
+  source?: "local-checkout" | "github-pull-request";
+  pullRequestNumber?: number;
+  limitations?: string[];
   baseRef: string;
   headRef: string;
   headSha: string;
@@ -17,6 +20,13 @@ export type RepositorySnapshot = {
   workingTreeFiles: string[];
   diff: string;
   history: CommitEvidence[];
+  historyCoverage?: {
+    pathsSearched: number;
+    pathsTotal: number;
+    pathsFailed: number;
+    commitsPerPath: number;
+    mayHaveMore: boolean;
+  };
 };
 
 function git(repositoryPath: string, args: string[]): string {
@@ -111,6 +121,7 @@ export function collectRepositorySnapshot(
   }
 
   return {
+    source: "local-checkout",
     baseRef,
     headRef,
     headSha,

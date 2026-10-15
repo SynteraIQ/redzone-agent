@@ -1,5 +1,6 @@
 import type { RedZoneAnalysis } from "./agent.ts";
 import type { ReviewCoverage, ReviewEvidence } from "./github.ts";
+import type { AppliedMemory } from "./memory-store.ts";
 import type { RepositorySnapshot } from "./history.ts";
 import type { EvidenceReference } from "./analysis-evidence.ts";
 
@@ -10,6 +11,7 @@ type AnalysisReportInput = {
   analysis: RedZoneAnalysis;
   reviewEvidence: ReviewEvidence[];
   sourceCoverage: ReviewCoverage;
+  appliedMemories?: AppliedMemory[];
 };
 
 function compactText(value: string, maxCharacters: number): string {
@@ -132,6 +134,14 @@ function coverageLines(coverage: ReviewCoverage): string[] {
   return lines;
 }
 
+function pathHistoryCoverageLine(snapshot: RepositorySnapshot): string | undefined {
+  if (!snapshot.historyCoverage) return undefined;
+  const coverage = snapshot.historyCoverage;
+  const failure = coverage.pathsFailed > 0 ? `; ${coverage.pathsFailed} path queries failed` : "";
+  const suffix = coverage.mayHaveMore ? "; older or additional path history may be missing" : "";
+  return `Rollback history inspected up to ${coverage.commitsPerPath} commits for ${coverage.pathsSearched} of ${coverage.pathsTotal} changed paths${failure}${suffix}.`;
+}
+
 export function formatAnalysisReport(input: AnalysisReportInput): string {
   const { analysis, reviewEvidence, snapshot, sourceCoverage } = input;
   const riskLabel = analysis.riskLevel === "insufficient-evidence"
@@ -147,10 +157,14 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
       .filter((reference) => reference.kind === "review")
       .map((reference) => reference.id.slice("review:".length)),
   ]);
-  const workingTreeLine = snapshot.workingTreeFiles.length > 0
-    ? `**Uncommitted tracked files:** ${snapshot.workingTreeFiles.slice(0, 5).map((path) => `\`${path}\``).join(", ")}` +
-      (snapshot.workingTreeFiles.length > 5 ? `, and ${snapshot.workingTreeFiles.length - 5} more` : "")
-    : "**Uncommitted tracked files:** none";
+  const workingTreeLine = snapshot.source === "github-pull-request"
+    ? input.repository && snapshot.pullRequestNumber
+      ? `**Pull request:** [#${snapshot.pullRequestNumber}](https://github.com/${input.repository}/pull/${snapshot.pullRequestNumber})`
+      : "**Change source:** GitHub pull request snapshot"
+    : snapshot.workingTreeFiles.length > 0
+      ? `**Uncommitted tracked files:** ${snapshot.workingTreeFiles.slice(0, 5).map((path) => `\`${path}\``).join(", ")}` +
+        (snapshot.workingTreeFiles.length > 5 ? `, and ${snapshot.workingTreeFiles.length - 5} more` : "")
+      : "**Uncommitted tracked files:** none";
   const commitLines = snapshot.history
     .filter((commit) => citedCommits.has(commit.hash))
     .map((commit) => {
@@ -193,6 +207,7 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
       : []),
   ];
   const reviewerSuggestions = suggestedReviewers(analysis, reviewEvidence);
+  const appliedMemories = input.appliedMemories ?? [];
 
   return [
     "# Red Zone result",
@@ -200,7 +215,7 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
     `**Risk:** ${riskLabel}  `,
     `**Repository:** \`${input.repository ?? sourceCoverage.repository ?? input.repositoryPath}\` · **Base:** \`${snapshot.baseRef}\``,
     workingTreeLine,
-    "Untracked files are not included in this analysis.",
+    ...(snapshot.source === "github-pull-request" ? [] : ["Untracked files are not included in this analysis."]),
     "",
     "## Change",
     compactText(analysis.summary, 360),
@@ -222,6 +237,12 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
       ? [`Evidence: ${analysis.synthesisEvidence.map(formatEvidenceReference).join("; ")}`]
       : ["Evidence: no historical sources were cited."]),
     "",
+    "## Repository memory",
+    ...(appliedMemories.length > 0
+      ? ["Human-approved memory was included as contextual guidance (not incident evidence):",
+        ...appliedMemories.map((memory) => `- **${compactText(memory.title, 180)}** · ${memory.kind} v${memory.version}: ${compactText(memory.summary, 240)}`)]
+      : ["No active repository memory was applied to this run."]),
+    "",
     "## Maintainer review",
     ...(maintainerReviewReasons.length > 0
       ? ["**Recommended** — validate the change with a maintainer before relying on this assessment.",
@@ -241,6 +262,8 @@ export function formatAnalysisReport(input: AnalysisReportInput): string {
     "",
     "## Coverage",
     ...coverageLines(sourceCoverage).map((line) => `- ${compactText(line, 220)}`),
+    ...(snapshot.limitations ?? []).map((limitation) => `- ${compactText(limitation, 220)}`),
+    ...(pathHistoryCoverageLine(snapshot) ? [`- ${compactText(pathHistoryCoverageLine(snapshot) ?? "", 220)}`] : []),
     "",
     ...(analysis.followUpQuestions.length > 0
       ? ["## Follow-up", ...analysis.followUpQuestions.slice(0, 3).map((question) => `- ${compactText(question, 180)}`)]

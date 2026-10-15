@@ -5,7 +5,6 @@ import { getServerSession } from "next-auth";
 import { NextRequest } from "next/server";
 import { authOptions, githubOAuthConfigured } from "../../../../auth.ts";
 import { getSelectedRepositoryContextForRequest, RepositorySelectionError } from "../../../../github-app.ts";
-import { getGitHubOriginRepository } from "../../../../history.ts";
 import {
   createStalePullRequestRunReference,
   createStalePullRequestSubjectKey,
@@ -99,15 +98,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   const requestId = randomUUID();
   let repository: string | null = null;
   try {
-    const localRepository = getGitHubOriginRepository(process.cwd());
-    if (!localRepository) throw new Error("Could not identify the current checkout's GitHub origin.");
     const selected = await getSelectedRepositoryContextForRequest(request);
     repository = selected.repository;
-    if (selected.repository.toLowerCase() !== localRepository.toLowerCase()) {
-      throw new RepositorySelectionError(
-        `Selected repository ${selected.repository} does not match the current checkout origin ${localRepository}.`,
-      );
-    }
 
     console.info("[redzone:stale-pr] Durable run requested", {
       requestId,
@@ -144,13 +136,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     return response;
   } catch (error) {
     const expectedError = error instanceof RepositorySelectionError;
+    const errorMessage = error instanceof Error ? error.message : "Could not start the stale pull request workflow.";
     console.error("[redzone:stale-pr] Durable run start failed", {
       requestId,
       repository,
       error: error instanceof Error ? { name: error.name, message: error.message } : "Unknown automation error",
     });
     return Response.json({
-      error: expectedError ? error.message : "Could not start the stale pull request workflow.",
+      error: expectedError ? errorMessage : "Could not start the stale pull request workflow.",
       requestId,
     }, { status: expectedError ? 400 : 500 });
   }
