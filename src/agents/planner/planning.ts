@@ -98,11 +98,9 @@ export async function prepareAnalysisContext(
       "Use a smaller change or reduce the available historical review evidence before retrying.",
     );
   }
-  const availableAgentIds: SpecialistAgentId[] = [
-    "change-scope-agent",
-    ...(rollbackEvidence.length > 0 ? ["rollback-history-agent"] : []),
-    ...(reviewEvidence.length > 0 ? ["review-context-agent"] : []),
-  ];
+  const availableAgentIds: SpecialistAgentId[] = ["change-scope-agent"];
+  if (rollbackEvidence.length > 0) availableAgentIds.push("rollback-history-agent");
+  if (reviewEvidence.length > 0) availableAgentIds.push("review-context-agent");
   return {
     candidateChange,
     impactGraph,

@@ -40,18 +40,40 @@ export function createEvidenceReferences(
       kind: "change" as const,
       label: `Changed file: ${filePath}`,
       url: githubFileUrl(repository, snapshot, filePath),
+      provenance: {
+        source: "git-diff" as const,
+        revision: snapshot.headSha,
+        baseRef: snapshot.baseRef,
+        baseRevision: snapshot.baseSha,
+        paths: [filePath],
+        includesWorkingTree: snapshot.workingTreeFiles.length > 0,
+      },
     })),
     ...impactGraph.directDependents.slice(0, 50).map((filePath) => ({
       id: `impact:direct:${filePath}`,
       kind: "impact" as const,
       label: `Direct dependent: ${filePath}`,
       url: githubFileUrl(repository, snapshot, filePath),
+      provenance: {
+        source: "static-analysis" as const,
+        revision: snapshot.headSha,
+        baseRef: snapshot.baseRef,
+        baseRevision: snapshot.baseSha,
+        paths: [filePath],
+      },
     })),
     ...impactGraph.transitiveDependents.slice(0, 50).map((filePath) => ({
       id: `impact:transitive:${filePath}`,
       kind: "impact" as const,
       label: `Transitive dependent: ${filePath}`,
       url: githubFileUrl(repository, snapshot, filePath),
+      provenance: {
+        source: "static-analysis" as const,
+        revision: snapshot.headSha,
+        baseRef: snapshot.baseRef,
+        baseRevision: snapshot.baseSha,
+        paths: [filePath],
+      },
     })),
   ];
   const historyEvidenceReferences: EvidenceReference[] = snapshot.history.map((commit) => ({

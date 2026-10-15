@@ -420,7 +420,7 @@ export async function collectExpertMap(
       githubPaginated<GitHubComment>(`repos/${normalizedRepository}/pulls/${pullRequest.number}/comments?per_page=100`, token),
     ]);
     const paths = [...new Set(files.map((file) => file.filename))];
-    const outcome = pullRequest.merged_at ? "merged" : pullRequest.state;
+    const outcome: ExpertMapActivity["pullRequestOutcome"] = pullRequest.merged_at ? "merged" : pullRequest.state;
     const submissionRecords = pullRequest.user?.login
       ? paths.map((filePath) => ({
           reviewId: `submission-${pullRequest.number}`,
