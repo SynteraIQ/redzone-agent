@@ -9,19 +9,39 @@ type MemoryWorkspaceProps = {
   databaseConfigured: boolean;
 };
 
-type MemoryTab = "all" | "patterns" | "instructions" | "evidence" | "applied";
+type MemoryTab = "patterns" | "instructions" | "evidence" | "applied";
+type LearnedEvidenceLink = {
+  id: string;
+  sourceUrl: string;
+  source: string;
+  author: string;
+  pullRequestNumber: number;
+  pullRequestTitle: string;
+  excerpt: string;
+};
 
 const tabs: Array<{ id: MemoryTab; label: string; description: string }> = [
-  { id: "all", label: "All knowledge", description: "Repository-specific knowledge, with its sources and status." },
-  { id: "patterns", label: "Learned patterns", description: "Patterns inferred from review history and outcomes." },
   { id: "instructions", label: "Instructions", description: "Explicit review guidance with an identified source." },
-  { id: "evidence", label: "Evidence history", description: "Source events that may support or revise a knowledge item." },
-  { id: "applied", label: "Used in analysis", description: "Knowledge retrieved for prior analyses." },
+  { id: "patterns", label: "Learned patterns", description: "Automatically inferred from review history and outcomes." },
+  { id: "evidence", label: "Evidence", description: "Source events that may support or revise a knowledge item." },
+  { id: "applied", label: "Usage", description: "Knowledge retrieved for prior analyses." },
 ];
+
+function isLearnedEvidenceLink(value: unknown): value is LearnedEvidenceLink {
+  if (typeof value !== "object" || value === null) return false;
+  const evidence = value as Record<string, unknown>;
+  return typeof evidence.id === "string" && typeof evidence.sourceUrl === "string" &&
+    typeof evidence.source === "string" && typeof evidence.author === "string" &&
+    typeof evidence.pullRequestNumber === "number" && typeof evidence.pullRequestTitle === "string" &&
+    typeof evidence.excerpt === "string";
+}
 
 function MemoryCard({ memory }: { memory: MemoryRecord }) {
   const scope = Object.entries(memory.scope);
   const sourceUrl = typeof memory.content.sourceUrl === "string" ? memory.content.sourceUrl : null;
+  const supportingEvidence = Array.isArray(memory.content.evidence)
+    ? memory.content.evidence.filter(isLearnedEvidenceLink)
+    : [];
   return (
     <article className="memory-card">
       <div className="memory-card-heading">
@@ -38,16 +58,20 @@ function MemoryCard({ memory }: { memory: MemoryRecord }) {
       </div>
       {scope.length > 0 && <div className="memory-scope">{scope.map(([key, value]) => <span key={key}><strong>{key}</strong> {String(value)}</span>)}</div>}
       {sourceUrl && <a className="memory-source-link" href={sourceUrl} target="_blank" rel="noreferrer">Open source evidence ↗</a>}
+      {supportingEvidence.length > 0 && <div className="memory-evidence-links"><strong>Supporting review feedback</strong>{supportingEvidence.map((evidence) => <article key={evidence.id}><p>“{evidence.excerpt}”</p><span>{evidence.author} · PR #{evidence.pullRequestNumber} · {evidence.source.replaceAll("-", " ")}</span><a href={evidence.sourceUrl} target="_blank" rel="noreferrer">{evidence.pullRequestTitle} ↗</a></article>)}</div>}
     </article>
   );
 }
 
 export function MemoryWorkspace({ repository, databaseConfigured }: MemoryWorkspaceProps) {
-  const [tab, setTab] = useState<MemoryTab>("all");
+  const [tab, setTab] = useState<MemoryTab>("instructions");
   const [data, setData] = useState<MemoryWorkspaceData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [learning, setLearning] = useState(false);
+  const [minimumSupportingPullRequests, setMinimumSupportingPullRequests] = useState(2);
+  const [learningCoverage, setLearningCoverage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -84,7 +108,6 @@ export function MemoryWorkspace({ repository, databaseConfigured }: MemoryWorksp
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          kind: formData.get("kind"),
           title: formData.get("title"),
           summary: formData.get("summary"),
           sourceUrl: formData.get("sourceUrl"),
@@ -123,25 +146,65 @@ export function MemoryWorkspace({ repository, databaseConfigured }: MemoryWorksp
     }
   }
 
-  const visibleMemories = useMemo(() => {
-    if (!data) return [];
-    if (tab === "patterns") return data.memories.filter((memory) => memory.kind === "semantic");
-    if (tab === "instructions") return data.memories.filter((memory) => memory.kind === "procedural");
-    return data.memories;
-  }, [data, tab]);
+  async function generateLearnedPatterns() {
+    setLearning(true);
+    setActionError(null);
+    setNotice(null);
+    setLearningCoverage(null);
+    try {
+      const response = await fetch("/api/memory/learn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ minimumSupportingPullRequests }),
+      });
+      const result = await response.json() as {
+        error?: string;
+        message?: string;
+        coverage?: {
+          pullRequestLimit: number;
+          pullRequestsFetched: number;
+          mayHaveMorePullRequests: boolean;
+          reviewItemsFound: number;
+          reviewItemsAnalyzed: number;
+          minimumSupportingPullRequests: number;
+        };
+        evidenceEventsRecorded?: number;
+      };
+      if (!response.ok) throw new Error(result.error ?? "Could not generate learned patterns.");
+      setNotice(result.message ?? "Review-history scan completed.");
+      if (result.coverage) {
+        setLearningCoverage(
+          `Scanned ${result.coverage.pullRequestsFetched} of ${result.coverage.pullRequestLimit} recent PRs; analyzed ${result.coverage.reviewItemsAnalyzed} of ${result.coverage.reviewItemsFound} review items with a ${result.coverage.minimumSupportingPullRequests}-PR evidence threshold.${result.coverage.mayHaveMorePullRequests ? " Older PRs may contain additional evidence." : ""}`,
+        );
+      }
+      await reloadMemory();
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "Could not generate learned patterns.");
+    } finally {
+      setLearning(false);
+    }
+  }
+
+  const visibleInstructions = useMemo(
+    () => data?.memories.filter((item) => item.kind === "procedural") ?? [],
+    [data],
+  );
+  const visiblePatterns = useMemo(
+    () => data?.memories.filter((item) => item.kind === "semantic") ?? [],
+    [data],
+  );
 
   return (
     <section className="memory-workspace">
-      <div className="memory-tabs" role="tablist" aria-label="Knowledge type">
+      <div className="memory-tabs" role="tablist" aria-label="Knowledge views">
         {tabs.map((item) => <button key={item.id} className={tab === item.id ? "memory-tab active" : "memory-tab"} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}>{item.label}</button>)}
       </div>
       <p className="memory-description">{tabs.find((item) => item.id === tab)?.description}</p>
 
-      {databaseConfigured && repository !== "Select a repository" && <form className="memory-capture-form" onSubmit={submitCandidate}>
-        <div><span className="section-kicker">CAPTURE REPOSITORY KNOWLEDGE</span><h2>Propose knowledge</h2><p>Record a reusable pattern or instruction with a GitHub source. It stays a candidate until a human approves it.</p></div>
-        <label>Knowledge type<select name="kind" defaultValue="semantic"><option value="semantic">Learned pattern</option><option value="procedural">Review instruction</option></select></label>
+      {tab === "instructions" && databaseConfigured && repository !== "Select a repository" && <form className="memory-capture-form" onSubmit={submitCandidate}>
+        <div><span className="section-kicker">REVIEW GUIDANCE</span><h2>Add a review instruction</h2><p>Write explicit guidance for future analyses and cite its GitHub source. It stays a candidate until a human approves it.</p></div>
         <label>Title<input name="title" required minLength={3} maxLength={240} placeholder="e.g. Keep workflow retries idempotent" /></label>
-        <label>Knowledge<textarea name="summary" required minLength={10} maxLength={2000} rows={3} placeholder="What should future analyses learn, and when does it apply?" /></label>
+        <label>Instruction<textarea name="summary" required minLength={10} maxLength={2000} rows={3} placeholder="What should reviewers check, and when does this instruction apply?" /></label>
         <label>GitHub evidence URL<input name="sourceUrl" required type="url" placeholder={`https://github.com/${repository}/pull/123`} /></label>
         <button className="plan-button" type="submit" disabled={saving}>{saving ? "Saving…" : "Save candidate"}</button>
       </form>}
@@ -152,10 +215,22 @@ export function MemoryWorkspace({ repository, databaseConfigured }: MemoryWorksp
         : repository === "Select a repository" ? <div className="memory-empty"><h2>Choose a repository</h2><p>Knowledge is scoped to the connected GitHub App installation and selected repository.</p><a href="/repositories">Open Repositories <span>→</span></a></div>
           : loading ? <div className="memory-empty memory-empty-compact"><span className="spinner" /> Loading repository knowledge…</div>
             : error ? <div className="memory-error" role="alert">{error}</div>
-              : tab === "evidence" ? <div className="memory-event-list">{data?.events.length ? data.events.map((event) => <article className="memory-event" key={event.id}><div><strong>{event.eventType.replaceAll("memory", "knowledge").replaceAll("-", " ")}</strong><span>{event.sourceType} · {event.sourceId}</span></div><time>{new Date(event.occurredAt).toLocaleDateString()}</time>{event.sourceUrl && <a href={event.sourceUrl} target="_blank" rel="noreferrer">Open evidence ↗</a>}</article>) : <div className="memory-empty"><h2>No knowledge events yet</h2><p>Source events will appear here as RedZone begins capturing review decisions and outcomes.</p></div>}</div>
+              : tab === "patterns" ? <div className="memory-patterns">
+                  <div className="memory-pattern-action"><div><h2>Learn from review history</h2><p>Scan recent pull requests for repeated human review guidance. Suggestions stay inactive until approved.</p><label>Minimum supporting PRs<select value={minimumSupportingPullRequests} onChange={(event) => setMinimumSupportingPullRequests(Number(event.target.value))} disabled={learning || saving}><option value={2}>2 PRs</option><option value={3}>3 PRs</option><option value={4}>4 PRs</option><option value={5}>5 PRs</option></select></label></div><button className="plan-button" type="button" disabled={learning || saving} onClick={generateLearnedPatterns}>{learning ? <><span className="spinner" /> Scanning review history…</> : "Generate candidates"}</button></div>
+                  {learningCoverage && <p className="memory-description">{learningCoverage}</p>}
+                  {visiblePatterns.length ? <div className="memory-list">{visiblePatterns.map((memory) => <div key={memory.id}><MemoryCard memory={memory} />{memory.status === "candidate" && <div className="memory-candidate-actions"><span>Human review required</span><button type="button" disabled={saving || learning} onClick={() => decideCandidate(memory.id, "approve")}>Approve</button><button type="button" disabled={saving || learning} onClick={() => decideCandidate(memory.id, "archive")}>Archive</button></div>}</div>)}</div>
+                    : <div className="memory-empty"><h2>No learned patterns yet</h2><p>Run a scan to find recurring guidance in this repository’s recent review history.</p></div>}
+                </div>
+                : tab === "evidence" ? <div className="memory-event-list">{data?.events.length ? data.events.map((event) => {
+                    const body = typeof event.details.body === "string" ? event.details.body : null;
+                    const pullRequestNumber = typeof event.details.pullRequestNumber === "number" ? event.details.pullRequestNumber : null;
+                    const pullRequestTitle = typeof event.details.pullRequestTitle === "string" ? event.details.pullRequestTitle : null;
+                    const decision = typeof event.details.decision === "string" ? event.details.decision : null;
+                    return <article className="memory-event" key={event.id}><div><strong>{event.eventType.replaceAll("memory", "knowledge").replaceAll("-", " ")}</strong><span>{event.actorId ?? event.sourceType}{pullRequestNumber ? ` · PR #${pullRequestNumber}` : ` · ${event.sourceId}`}{decision ? ` · ${decision}` : ""}</span>{pullRequestTitle && <small>{pullRequestTitle}</small>}{body && <p className="memory-evidence-quote">“{body}”</p>}</div><time>{new Date(event.occurredAt).toLocaleDateString()}</time>{event.sourceUrl && <a href={event.sourceUrl} target="_blank" rel="noreferrer">Open source ↗</a>}</article>;
+                  }) : <div className="memory-empty"><h2>No knowledge events yet</h2><p>Source events will appear here as RedZone begins capturing review decisions and outcomes.</p></div>}</div>
                 : tab === "applied" ? <div className="memory-event-list">{data?.applications.length ? data.applications.map((application) => <article className="memory-event memory-application" key={application.id}><div><strong>Analysis {application.analysisId}</strong><span>{application.memories.length} knowledge items used · {application.resultSummary ?? "No result summary recorded"}</span>{application.memories.map((memory) => <small key={memory.memoryId}>{memory.title}: {memory.reason}</small>)}</div><time>{new Date(application.appliedAt).toLocaleDateString()}</time></article>) : <div className="memory-empty"><h2>No knowledge used in analyses yet</h2><p>When an analysis retrieves durable knowledge, its references and rationale will appear here.</p></div>}</div>
-                    : visibleMemories.length ? <div className="memory-list">{visibleMemories.map((memory) => <div key={memory.id}><MemoryCard memory={memory} />{memory.status === "candidate" && <div className="memory-candidate-actions"><span>Human review required</span><button type="button" disabled={saving} onClick={() => decideCandidate(memory.id, "approve")}>Approve</button><button type="button" disabled={saving} onClick={() => decideCandidate(memory.id, "archive")}>Archive</button></div>}</div>)}</div>
-                    : <div className="memory-empty"><h2>{tab === "patterns" ? "No learned patterns yet" : tab === "instructions" ? "No instructions yet" : "No saved knowledge yet"}</h2><p>RedZone currently builds review context on demand. Persistent knowledge will appear here once knowledge events are captured and reviewed.</p></div>}
+                    : visibleInstructions.length ? <div className="memory-list">{visibleInstructions.map((memory) => <div key={memory.id}><MemoryCard memory={memory} />{memory.status === "candidate" && <div className="memory-candidate-actions"><span>Human review required</span><button type="button" disabled={saving} onClick={() => decideCandidate(memory.id, "approve")}>Approve</button><button type="button" disabled={saving} onClick={() => decideCandidate(memory.id, "archive")}>Archive</button></div>}</div>)}</div>
+                    : <div className="memory-empty"><h2>No instructions yet</h2><p>Explicit review guidance will appear here after it is submitted and reviewed.</p></div>}
     </section>
   );
 }
