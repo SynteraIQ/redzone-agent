@@ -8,7 +8,7 @@ import ReactMarkdown from "react-markdown";
 import { AGENT_CATALOG } from "../../agent-catalog.ts";
 import { SpecialistAgentIdSchema } from "../../analysis-plan.ts";
 import type { AnalysisPlanPreview, SpecialistAgentId } from "../../analysis-plan.ts";
-import type { AnalysisProgressEvent, AnalysisUIMessage } from "../../analysis-progress.ts";
+import type { AnalysisProgressEvent, AnalysisRunContext, AnalysisUIMessage } from "../../analysis-progress.ts";
 import { Sidebar } from "./sidebar";
 
 type DashboardProps = {
@@ -42,6 +42,10 @@ function getProgressEvents(message: AnalysisUIMessage): AnalysisProgressEvent[] 
     }
   }
   return [...latestByStage.values()];
+}
+
+function getRunContext(message: AnalysisUIMessage): AnalysisRunContext | undefined {
+  return [...message.parts].reverse().find((part) => part.type === "data-analysisContext")?.data;
 }
 
 export function Dashboard({
@@ -236,6 +240,7 @@ export function Dashboard({
                 {messages.filter((message) => message.role === "assistant").map((message) => {
                   const report = message.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
                   const progress = getProgressEvents(message);
+                  const runContext = getRunContext(message);
                   const isLatestRun = message.id === latestAssistantMessage?.id;
                   const runFailed = progress.some((event) => event.stage === "analysis" && event.status === "failed");
                   const runActive = busy && isLatestRun;
@@ -260,6 +265,34 @@ export function Dashboard({
                           ))}
                         </div>
                       )}
+                      {runContext && <details className="analysis-working-context" open>
+                        <summary><span><strong>Working context</strong><small>Run-scoped information supplied to the planner</small></span><span>{runContext.knowledge.length} knowledge items · {runContext.reviewEvidenceCount} review records</span></summary>
+                        <div className="analysis-working-context-body">
+                          <p className="analysis-context-note">These sources were available to the planner. Their presence does not mean every source influenced the final assessment.</p>
+                          <div className="analysis-context-files"><strong>Changed files</strong><span>{runContext.changedFiles.length ? runContext.changedFiles.map((file) => <code key={file}>{file}</code>) : "No changed files recorded"}</span></div>
+                          <div className="analysis-context-reviews"><strong>Similar past episodes <small>{runContext.episodeCount} reviewed PRs overlap the changed files · showing up to 8</small></strong>
+                            <p className="analysis-context-note">Similarity is based on exact file overlap. A merged or closed PR does not establish that it caused an incident or regression.</p>
+                            {runContext.episodes.length ? runContext.episodes.map((episode) => <article key={episode.id}>
+                              <div><a href={episode.pullRequestUrl} target="_blank" rel="noreferrer">PR #{episode.pullRequestNumber} · {episode.pullRequestTitle} ↗</a><span>Outcome: {episode.outcome === "merged" ? "Merged" : episode.outcome === "closed" ? "Closed (not merged)" : episode.outcome === "open" ? "Open" : "Unknown"}</span></div>
+                              <small>Overlapping files: {episode.overlappingFiles.map((file) => <code key={file}>{file}</code>)}</small>
+                              {episode.feedback.map((feedback) => <div className="analysis-context-episode-feedback" key={feedback.id}>
+                                <span>{feedback.author} · {feedback.source.replaceAll("-", " ")}{feedback.decision ? ` · ${feedback.decision}` : ""}</span>
+                                <p>“{feedback.excerpt}”</p>
+                                <a href={feedback.commentUrl} target="_blank" rel="noreferrer">Open review evidence ↗</a>
+                              </div>)}
+                            </article>) : <p>No reviewed pull requests with overlapping changed files were found in the available history.</p>}
+                          </div>
+                          <div className="analysis-context-knowledge"><strong>Approved repository knowledge</strong>
+                            {runContext.knowledge.length ? runContext.knowledge.map((item) => <article key={item.id}>
+                              <div><span className={`memory-kind memory-kind-${item.kind}`}>{item.kind === "semantic" ? "LEARNED PATTERN" : "INSTRUCTION"} · v{item.version}</span><h4>{item.title}</h4></div>
+                              <p>{item.summary}</p>
+                              <span className="analysis-context-source">Provided to planner as contextual guidance · not incident evidence</span>
+                              {item.sourceUrl && <a href={item.sourceUrl} target="_blank" rel="noreferrer">Open source ↗</a>}
+                              {item.evidence.map((evidence) => <div className="analysis-context-evidence" key={evidence.id}><a href={evidence.sourceUrl} target="_blank" rel="noreferrer">{evidence.label} ↗</a>{evidence.excerpt && <p>“{evidence.excerpt}”</p>}</div>)}
+                            </article>) : <p>No approved repository knowledge was loaded for this run.</p>}
+                          </div>
+                        </div>
+                      </details>}
                       {report && <div className="report-markdown"><ReactMarkdown>{report}</ReactMarkdown></div>}
                     </article>
                   );

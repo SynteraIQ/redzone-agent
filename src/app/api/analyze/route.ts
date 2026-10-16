@@ -107,6 +107,85 @@ export async function POST(request: NextRequest): Promise<Response> {
             });
           }
         }
+        const episodesByPullRequest = new Map<number, {
+          id: number;
+          pullRequestNumber: number;
+          pullRequestTitle: string;
+          pullRequestUrl: string;
+          outcome: "open" | "merged" | "closed" | "unknown";
+          overlappingFiles: string[];
+          feedback: Array<{
+            id: string;
+            author: string;
+            source: string;
+            decision?: string;
+            commentUrl: string;
+            excerpt: string;
+          }>;
+        }>();
+        for (const item of reviewCollection.evidence) {
+          let episode = episodesByPullRequest.get(item.pullRequestNumber);
+          if (!episode) {
+            episode = {
+              id: item.pullRequestNumber,
+              pullRequestNumber: item.pullRequestNumber,
+              pullRequestTitle: item.pullRequestTitle,
+              pullRequestUrl: item.pullRequestUrl,
+              outcome: item.pullRequestOutcome ?? "unknown",
+              overlappingFiles: item.overlappingFiles ?? [],
+              feedback: [],
+            };
+            episodesByPullRequest.set(item.pullRequestNumber, episode);
+          }
+          if (episode.feedback.length < 3) {
+            episode.feedback.push({
+              id: item.id,
+              author: item.author,
+              source: item.source,
+              ...(item.decision ? { decision: item.decision } : {}),
+              commentUrl: item.commentUrl,
+              excerpt: item.body.slice(0, 500),
+            });
+          }
+        }
+        const episodes = [...episodesByPullRequest.values()];
+        writer.write({
+          type: "data-analysisContext",
+          id: messageId,
+          data: {
+            changedFiles: snapshot.changedFiles.slice(0, 20),
+            reviewEvidenceCount: reviewCollection.evidence.length,
+            episodeCount: episodes.length,
+            episodes: episodes.slice(0, 8),
+            knowledge: activeMemories.map((memory) => {
+              const sourceUrl = typeof memory.content.sourceUrl === "string" ? memory.content.sourceUrl : undefined;
+              const evidence = Array.isArray(memory.content.evidence)
+                ? memory.content.evidence.flatMap((item) => {
+                    if (typeof item !== "object" || item === null) return [];
+                    const entry = item as Record<string, unknown>;
+                    if (typeof entry.id !== "string" || typeof entry.sourceUrl !== "string") return [];
+                    return [{
+                      id: entry.id,
+                      sourceUrl: entry.sourceUrl,
+                      label: typeof entry.pullRequestTitle === "string"
+                        ? `PR #${String(entry.pullRequestNumber ?? "")} · ${entry.pullRequestTitle}`
+                        : "Source review evidence",
+                      ...(typeof entry.excerpt === "string" ? { excerpt: entry.excerpt.slice(0, 300) } : {}),
+                    }];
+                  }).slice(0, 3)
+                : [];
+              return {
+                id: memory.id,
+                kind: memory.kind,
+                title: memory.title,
+                summary: memory.summary.slice(0, 800),
+                version: memory.version,
+                ...(sourceUrl ? { sourceUrl } : {}),
+                evidence,
+              };
+            }),
+          },
+        });
         const analysis = await analyzeSnapshot(
           snapshot,
           reviewCollection.evidence,

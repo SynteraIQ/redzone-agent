@@ -14,6 +14,8 @@ export type ReviewEvidence = {
   commitId?: string;
   commentUrl: string;
   createdAt: string;
+  pullRequestOutcome?: "open" | "merged" | "closed";
+  overlappingFiles?: string[];
 };
 
 export type ReviewCoverage = {
@@ -323,6 +325,7 @@ export async function collectReviewEvidence(
       .filter((file) => changedPathSet.has(file));
     if (overlappingFiles.length === 0) continue;
     overlappingPullRequests++;
+    const pullRequestOutcome = pullRequest.merged_at ? "merged" : pullRequest.state;
 
     const formalReviews = await githubPaginated<GitHubReview>(
       `repos/${repository}/pulls/${pullRequest.number}/reviews?per_page=100`,
@@ -342,6 +345,8 @@ export async function collectReviewEvidence(
         commitId: review.commit_id,
         commentUrl: review.html_url,
         createdAt: review.submitted_at,
+        pullRequestOutcome,
+        overlappingFiles,
       });
     }
 
@@ -363,6 +368,8 @@ export async function collectReviewEvidence(
         commitId: comment.commit_id,
         commentUrl: comment.html_url,
         createdAt: comment.created_at,
+        pullRequestOutcome,
+        overlappingFiles,
       });
     }
 
@@ -387,6 +394,8 @@ export async function collectReviewEvidence(
         body: comment.body,
         commentUrl: comment.html_url,
         createdAt: comment.created_at,
+        pullRequestOutcome,
+        overlappingFiles,
       });
     }
   }

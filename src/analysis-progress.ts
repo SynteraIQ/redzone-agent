@@ -21,6 +21,37 @@ export type AnalysisProgressEvent = {
   limitations?: string[];
 };
 
+export type AnalysisRunContext = {
+  changedFiles: string[];
+  reviewEvidenceCount: number;
+  episodeCount: number;
+  episodes: Array<{
+    id: number;
+    pullRequestNumber: number;
+    pullRequestTitle: string;
+    pullRequestUrl: string;
+    outcome: "open" | "merged" | "closed" | "unknown";
+    overlappingFiles: string[];
+    feedback: Array<{
+      id: string;
+      author: string;
+      source: string;
+      decision?: string;
+      commentUrl: string;
+      excerpt: string;
+    }>;
+  }>;
+  knowledge: Array<{
+    id: string;
+    kind: "semantic" | "procedural";
+    title: string;
+    summary: string;
+    version: number;
+    sourceUrl?: string;
+    evidence: Array<{ id: string; sourceUrl: string; label: string; excerpt?: string }>;
+  }>;
+};
+
 export type AgentChatRouteEvent = {
   targetAgentId: string;
   targetAgentName: string;
@@ -34,4 +65,5 @@ export type AgentChatUIMessage = UIMessage<unknown, {
 
 export type AnalysisUIMessage = UIMessage<unknown, {
   analysisProgress: AnalysisProgressEvent;
+  analysisContext: AnalysisRunContext;
 }>;
