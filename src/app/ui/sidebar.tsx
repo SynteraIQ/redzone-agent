@@ -24,7 +24,7 @@ type SidebarProps = {
   authConfigured: boolean;
   githubAppConfigured: boolean;
   githubAppConnected: boolean;
-  activePage: "analysis" | "agents" | "repositories" | "experts" | "automations" | "connections" | "memory";
+  activePage: "analysis" | "agents" | "repositories" | "experts" | "automations" | "connections" | "knowledge";
 };
 
 type RepositorySwitcherProps = {
@@ -166,7 +166,7 @@ export function Sidebar({
       <nav className="side-nav" aria-label="Main navigation">
         <a className={`nav-item ${activePage === "analysis" ? "active" : "muted"}`} href="/" aria-current={activePage === "analysis" ? "page" : undefined}><span>◈</span> Review</a>
         <a className={`nav-item ${activePage === "experts" ? "active" : "muted"}`} href="/experts" aria-current={activePage === "experts" ? "page" : undefined}><span>◎</span> Expert map</a>
-        <a className={`nav-item ${activePage === "memory" ? "active" : "muted"}`} href="/memory" aria-current={activePage === "memory" ? "page" : undefined}><span>◉</span> Memory</a>
+        <a className={`nav-item ${activePage === "knowledge" ? "active" : "muted"}`} href="/knowledge" aria-current={activePage === "knowledge" ? "page" : undefined}><span>◉</span> Knowledge</a>
         <a className={`nav-item ${activePage === "automations" ? "active" : "muted"}`} href="/automations" aria-current={activePage === "automations" ? "page" : undefined}><span>↻</span> Automations</a>
         <a className={`nav-item ${activePage === "connections" ? "active" : "muted"}`} href="/connections" aria-current={activePage === "connections" ? "page" : undefined}><span>⌘</span> Connections</a>
         <a className={`nav-item ${activePage === "agents" ? "active" : "muted"}`} href="/agents" aria-current={activePage === "agents" ? "page" : undefined}><span>◇</span> Agents</a>

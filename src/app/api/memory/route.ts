@@ -11,7 +11,6 @@ import { createMemoryCandidate } from "../../../memory-store.ts";
 export const runtime = "nodejs";
 
 const MemoryCandidateSchema = z.object({
-  kind: z.enum(["semantic", "procedural"]),
   title: z.string().trim().min(3).max(240),
   summary: z.string().trim().min(10).max(2000),
   sourceUrl: z.string().url().max(2000),
@@ -26,13 +25,13 @@ async function authorizeMemoryWrite(): Promise<Response | null> {
   const session = githubOAuthConfigured ? await getServerSession(authOptions) : null;
   const localDeveloperMode = process.env.NODE_ENV !== "production" && process.env.REDZONE_DEV_MODE === "true";
   if (githubOAuthConfigured && !session) {
-    return Response.json({ error: "Sign in with GitHub to update repository memory." }, { status: 401 });
+    return Response.json({ error: "Sign in with GitHub to update repository knowledge." }, { status: 401 });
   }
   if (!session && !localDeveloperMode) {
-    return Response.json({ error: "Memory requires an authenticated GitHub session." }, { status: 401 });
+    return Response.json({ error: "Knowledge requires an authenticated GitHub session." }, { status: 401 });
   }
   if (!isMemoryDatabaseConfigured()) {
-    return Response.json({ error: "Set DATABASE_URL to enable persistent memory." }, { status: 503 });
+    return Response.json({ error: "Set DATABASE_URL to enable persistent knowledge." }, { status: 503 });
   }
   return null;
 }
@@ -41,10 +40,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   const session = githubOAuthConfigured ? await getServerSession(authOptions) : null;
   const localDeveloperMode = process.env.NODE_ENV !== "production" && process.env.REDZONE_DEV_MODE === "true";
   if (githubOAuthConfigured && !session) {
-    return Response.json({ error: "Sign in with GitHub to view repository memory." }, { status: 401 });
+    return Response.json({ error: "Sign in with GitHub to view repository knowledge." }, { status: 401 });
   }
   if (!session && !localDeveloperMode) {
-    return Response.json({ error: "Memory requires an authenticated GitHub session." }, { status: 401 });
+    return Response.json({ error: "Knowledge requires an authenticated GitHub session." }, { status: 401 });
   }
   if (!isMemoryDatabaseConfigured()) {
     return Response.json({ configured: false, memories: [], events: [], applications: [] });
@@ -84,6 +83,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         sourceId: memoryEvents.sourceId,
         sourceUrl: memoryEvents.sourceUrl,
         actorId: memoryEvents.actorId,
+        details: memoryEvents.details,
         occurredAt: memoryEvents.occurredAt,
       })
         .from(memoryEvents)
@@ -141,7 +141,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     console.error("[redzone:memory] Could not load repository memory", {
       message: error instanceof Error ? error.message : "Unknown memory read error",
     });
-    return Response.json({ error: "Could not load memory for the selected repository." }, { status: 500 });
+    return Response.json({ error: "Could not load knowledge for the selected repository." }, { status: 500 });
   }
 }
 
@@ -153,7 +153,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
   }
   const parsed = MemoryCandidateSchema.safeParse(body);
-  if (!parsed.success) return Response.json({ error: "Add a valid memory and source URL." }, { status: 400 });
+  if (!parsed.success) return Response.json({ error: "Add a valid knowledge item and source URL." }, { status: 400 });
 
   try {
     const { repository, installationId, subject } = await getSelectedRepositoryContextForRequest(request);
@@ -167,6 +167,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       tenantId: String(installationId),
       repository,
       actorId: subject,
+      kind: "procedural",
       ...parsed.data,
     });
     return Response.json({ id, status: "candidate" }, { status: 201 });
@@ -174,7 +175,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     console.error("[redzone:memory] Could not save memory candidate", {
       message: error instanceof Error ? error.message : "Unknown memory write error",
     });
-    return Response.json({ error: "Could not save the memory candidate." }, { status: 500 });
+    return Response.json({ error: "Could not save the knowledge candidate." }, { status: 500 });
   }
 }
 
@@ -186,7 +187,7 @@ export async function PATCH(request: NextRequest): Promise<Response> {
     return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
   }
   const parsed = MemoryDecisionSchema.safeParse(body);
-  if (!parsed.success) return Response.json({ error: "Choose a valid memory decision." }, { status: 400 });
+  if (!parsed.success) return Response.json({ error: "Choose a valid knowledge decision." }, { status: 400 });
 
   try {
     const { repository, installationId, subject } = await getSelectedRepositoryContextForRequest(request);
@@ -226,6 +227,6 @@ export async function PATCH(request: NextRequest): Promise<Response> {
     console.error("[redzone:memory] Could not record memory decision", {
       message: error instanceof Error ? error.message : "Unknown memory update error",
     });
-    return Response.json({ error: "Could not update the memory candidate." }, { status: 500 });
+    return Response.json({ error: "Could not update the knowledge candidate." }, { status: 500 });
   }
 }

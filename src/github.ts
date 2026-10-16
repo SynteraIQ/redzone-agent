@@ -36,6 +36,18 @@ export type ReviewCollection = {
   coverage: ReviewCoverage;
 };
 
+export type LearningReviewEvidence = ReviewEvidence & {
+  pullRequestOutcome: "open" | "merged" | "closed";
+};
+
+export type LearningReviewScan = {
+  repository: string;
+  pullRequestLimit: number;
+  pullRequestsFetched: number;
+  mayHaveMorePullRequests: boolean;
+  evidence: LearningReviewEvidence[];
+};
+
 export type PostedPullRequestSummary = {
   commentUrl: string;
 };
@@ -501,6 +513,68 @@ export async function collectExpertMap(
     pullRequestsWithReviewEvidence: scans.filter((scan) => scan.hasReviewEvidence).length,
     mayHaveMorePullRequests: pullRequests.length >= limit,
     records: scans.flatMap((scan) => scan.records),
+  };
+}
+
+export async function collectLearningReviewHistory(
+  repository: string,
+  token?: string,
+): Promise<LearningReviewScan> {
+  const normalizedRepository = configuredRepository(repository);
+  if (!normalizedRepository) throw new Error("Choose a repository before learning from review history.");
+  const limit = expertMapPullRequestLimit();
+  const pullRequests = await githubJson<PullRequestRecord[]>(
+    `repos/${normalizedRepository}/pulls?state=all&sort=updated&direction=desc&per_page=${limit}`,
+    token,
+  );
+  const scans = await mapWithConcurrency(pullRequests, 4, async (pullRequest) => {
+    const [reviews, inlineComments] = await Promise.all([
+      githubPaginated<GitHubReview>(`repos/${normalizedRepository}/pulls/${pullRequest.number}/reviews?per_page=100`, token),
+      githubPaginated<GitHubComment>(`repos/${normalizedRepository}/pulls/${pullRequest.number}/comments?per_page=100`, token),
+    ]);
+    const pullRequestOutcome: LearningReviewEvidence["pullRequestOutcome"] = pullRequest.merged_at
+      ? "merged"
+      : pullRequest.state;
+    const formalEvidence: LearningReviewEvidence[] = reviews
+      .filter((review) => Boolean(review.body?.trim() && review.submitted_at && review.user?.login && !review.user.login.endsWith("[bot]")))
+      .map((review) => ({
+        id: `formal-${review.id}`,
+        pullRequestNumber: pullRequest.number,
+        pullRequestTitle: pullRequest.title,
+        pullRequestUrl: pullRequest.html_url,
+        source: "formal-review",
+        author: review.user?.login ?? "unknown",
+        body: review.body ?? "",
+        decision: review.state,
+        commitId: review.commit_id,
+        commentUrl: review.html_url,
+        createdAt: review.submitted_at ?? "",
+        pullRequestOutcome,
+      }));
+    const inlineEvidence: LearningReviewEvidence[] = inlineComments
+      .filter((comment) => Boolean(comment.body?.trim() && comment.user?.login && !comment.user.login.endsWith("[bot]")))
+      .map((comment) => ({
+        id: `inline-${comment.id}`,
+        pullRequestNumber: pullRequest.number,
+        pullRequestTitle: pullRequest.title,
+        pullRequestUrl: pullRequest.html_url,
+        source: "inline-review",
+        author: comment.user?.login ?? "unknown",
+        body: comment.body ?? "",
+        path: comment.path,
+        commitId: comment.commit_id,
+        commentUrl: comment.html_url,
+        createdAt: comment.created_at,
+        pullRequestOutcome,
+      }));
+    return [...formalEvidence, ...inlineEvidence];
+  });
+  return {
+    repository: normalizedRepository,
+    pullRequestLimit: limit,
+    pullRequestsFetched: pullRequests.length,
+    mayHaveMorePullRequests: pullRequests.length >= limit,
+    evidence: scans.flat(),
   };
 }
 
