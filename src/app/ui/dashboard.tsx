@@ -165,7 +165,7 @@ export function Dashboard({
             <div>
               <div className="eyebrow"><span className="eyebrow-line" /> HISTORICAL CODE RISK</div>
               <h1>Catch the change<br />that looks familiar.</h1>
-              <p className="intro-copy">Red Zone checks changes against review history, rollback signals, and human-approved repository memory.</p>
+              <p className="intro-copy">Red Zone checks changes against review history, rollback signals, and human-approved repository knowledge.</p>
             </div>
             <div className="intro-mark" aria-hidden="true"><span>R</span><i /><i /><i /></div>
           </div>
