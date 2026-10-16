@@ -11,7 +11,6 @@ import { createMemoryCandidate } from "../../../memory-store.ts";
 export const runtime = "nodejs";
 
 const MemoryCandidateSchema = z.object({
-  kind: z.enum(["semantic", "procedural"]),
   title: z.string().trim().min(3).max(240),
   summary: z.string().trim().min(10).max(2000),
   sourceUrl: z.string().url().max(2000),
@@ -84,6 +83,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         sourceId: memoryEvents.sourceId,
         sourceUrl: memoryEvents.sourceUrl,
         actorId: memoryEvents.actorId,
+        details: memoryEvents.details,
         occurredAt: memoryEvents.occurredAt,
       })
         .from(memoryEvents)
@@ -167,6 +167,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       tenantId: String(installationId),
       repository,
       actorId: subject,
+      kind: "procedural",
       ...parsed.data,
     });
     return Response.json({ id, status: "candidate" }, { status: 201 });

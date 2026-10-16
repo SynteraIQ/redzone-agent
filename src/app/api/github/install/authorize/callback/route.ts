@@ -61,7 +61,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       },
     );
     return response;
-  } catch {
+  } catch (error) {
+    console.error("[redzone:github-app] Installation authorization verification failed", {
+      message: error instanceof Error ? error.message : "Unknown GitHub App verification error",
+    });
     return redirectWithStatus(request, "verification-failed");
   }
 }

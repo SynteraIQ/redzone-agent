@@ -25,6 +25,7 @@ export type MemoryEventRecord = {
   sourceId: string;
   sourceUrl: string | null;
   actorId: string | null;
+  details: Record<string, unknown>;
   occurredAt: string;
 };
 
