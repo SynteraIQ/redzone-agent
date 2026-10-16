@@ -24,7 +24,7 @@ type DashboardProps = {
 type PullRequestOption = { number: number; title: string; author: string; updatedAt: string; draft: boolean };
 
 const githubAppStatusMessages: Record<string, string> = {
-  connected: "GitHub App connected. Choose a repository from the Repositories menu to use its pull request history.",
+  connected: "GitHub App connected. Choose a repository from the repository selector to use its pull request history.",
   "sign-in-required": "Sign in with the GitHub App, then connect it to the repository.",
   "not-configured": "Configure the GitHub App credentials and setup URL before connecting it.",
   "invalid-state": "The GitHub connection could not be verified. Start the connection again.",
@@ -155,7 +155,7 @@ export function Dashboard({
 
       <section className="main-panel" id="analysis">
         <header className="topbar">
-          <div className="breadcrumb"><span>Repositories</span><span className="crumb-slash">/</span><strong>{repository}</strong></div>
+          <div className="breadcrumb"><span>Review</span><span className="crumb-slash">/</span><strong>{repository}</strong></div>
           <div className="topbar-right"><span className="live-indicator"><i /> Agent ready</span><span className="topbar-divider" /> <span className="version-label">RED ZONE AGENT</span></div>
         </header>
 
